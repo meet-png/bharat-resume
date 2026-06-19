@@ -103,14 +103,15 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 
 Carry these forward each session until resolved. Add new ones whenever a build decision needs Meet's input.
 
-- [ ] **GitHub username** — memory has `meet-png`. Confirm before creating the public repo.
-- [ ] **Push timing** — OK to push the empty-credentials scaffold to a public repo now, or wait until after Day 6? (Current view: push now; `.env` is gitignored, `.env.example` has only placeholder shapes.)
-- [ ] **Twilio Sandbox** — has Meet signed up + joined sandbox + grabbed `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN`?
+- [x] **GitHub username** — `meet-png`. Repo live: https://github.com/meet-png/bharat-resume (public).
+- [x] **Push timing** — pushed Day 1 after security hardening. `.env` confirmed gitignored.
+- [x] **Twilio Sandbox** — signed up, joined sandbox via WhatsApp, `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` / `TWILIO_WHATSAPP_FROM` in `.env`. Webhook URL not yet wired (pending ngrok).
+- [ ] **ngrok** — needed to expose local `:3000` to Twilio Sandbox for the Day 1 echo test. In progress.
+- [ ] **OpenAI** — needed Day 2 for info extraction + JD keyword + rewrite prompts.
+- [ ] **Anthropic** — needed Day 2 as fallback model per PRD §7.5.
 - [ ] **Supabase** — project created? Schema from PRD §13.1 applied? Storage bucket `resumes` created?
 - [ ] **Upstash Redis** — free tier instance provisioned? `REDIS_URL` ready?
-- [ ] **OpenAI + Anthropic** — API keys ready and dropped into `.env`?
-- [ ] **Razorpay test mode** — test keys generated? Webhook secret? Live-mode KYC kicked off?
-- [ ] **ngrok** — installed locally? Auth token in `ngrok config`?
+- [ ] **Razorpay test mode** — test keys generated? Webhook secret? Live-mode KYC kicked off in parallel?
 - [ ] **PRD §20 open items** — Naukri DOM selector (Day 3), ATS keyword count weighting (Day 5), edit iteration limit (Day 6), per-prompt tone tuning (Day 2). Resolve as we hit each.
 
 ---
