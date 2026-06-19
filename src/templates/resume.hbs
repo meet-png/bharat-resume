@@ -1,0 +1,44 @@
+{{!-- Resume template. PRD §9. Single column, A4, ATS-safe.
+     Receives resume_json_rewritten as context.
+     TODO Day 4: implement full layout per §9.2 / §9.3 section order. --}}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>{{name}} — Resume</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Source+Serif+4:wght@400;600&display=swap');
+
+    :root {
+      --color-text: #1a1a1a;
+      --color-muted: #555555;
+      --color-rule: #d0d0d0;
+      --color-link: #1a4d8c;
+      --font-display: 'Source Serif 4', Georgia, serif;
+      --font-body: 'Inter', -apple-system, sans-serif;
+      --size-name: 22pt;
+      --size-section: 11pt;
+      --size-body: 10pt;
+      --size-meta: 9pt;
+      --leading-body: 1.35;
+      --space-section: 14pt;
+      --space-item: 6pt;
+    }
+
+    @page { size: A4; margin: 16mm 18mm; }
+    body { font-family: var(--font-body); color: var(--color-text); font-size: var(--size-body); line-height: var(--leading-body); margin: 0; }
+    .name { font-family: var(--font-display); font-size: var(--size-name); font-weight: 600; }
+    .contact { font-size: var(--size-meta); color: var(--color-muted); }
+    h2 { font-size: var(--size-section); text-transform: uppercase; letter-spacing: 0.08em; border-bottom: 0.5pt solid var(--color-rule); padding-bottom: 2pt; margin-top: var(--space-section); margin-bottom: var(--space-item); }
+    a { color: var(--color-link); text-decoration: none; }
+    ul { padding-left: 14pt; margin: 0; }
+    li { margin-bottom: 2pt; }
+  </style>
+</head>
+<body>
+  <div class="name">{{name}}</div>
+  <div class="contact">{{email}}{{#if phone}} | {{phone}}{{/if}}{{#if linkedin}} | <a href="{{linkedin}}">LinkedIn</a>{{/if}}{{#if github}} | <a href="{{github}}">GitHub</a>{{/if}}</div>
+
+  {{!-- TODO Day 4: summary, education, skills, experience, projects, por, certifications, achievements — per §9.3 order, collapsing empty sections. --}}
+</body>
+</html>
