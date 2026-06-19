@@ -1,7 +1,18 @@
 node_modules/
+
+# Secrets — block all .env files, allow only the placeholder example
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
+
+# Credentials / keys (just in case anyone drops one in by mistake)
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+credentials.json
+service-account.json
 
 # Logs
 *.log

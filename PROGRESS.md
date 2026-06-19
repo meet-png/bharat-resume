@@ -28,12 +28,17 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 ## 2. Current implementation state
 
 **Working (locally, no external services required yet):**
-- Express server boots on `:3000` with pino logging.
+- Express server boots on `:3000` with pino logging, `helmet`, body-size cap, and `trust proxy: 1`.
 - `GET /health` → `{ ok: true, ts: ... }`.
-- `POST /webhook/twilio` → echoes inbound `Body` back as TwiML (Day 1 milestone code is in place; needs Twilio sandbox webhook URL pointing here to actually exchange messages).
+- `POST /webhook/twilio` → **signature-validated** (PRD-compliant, rejects forged requests with 403); echoes inbound `Body` back as TwiML on Day 1.
+- `POST /webhook/razorpay` → **HMAC-SHA256 signature validated**; handler stub.
+- `GET /admin/metrics` → **Basic Auth gated**; handler stub (Day 6).
 - `GET /payment-success` → renders `public/payment-success.html`.
 - `src/state/states.js` — full state constants + linear Phase 2 transition table.
 - `src/jd/parse.js` — Naukri URL detector + generic URL guard.
+- `src/security/{hash,twilioSignature,basicAuth}.js` — phone hashing, webhook validation, admin auth.
+- `src/payment/razorpay.js#verifyWebhookSignature` — implemented (security-critical, didn't wait for Day 5).
+- Pino logger redacts secrets and PII fields by default.
 
 **Scaffolded but not implemented (stubs throw, with `TODO Day N` markers pointing at PRD sections):**
 - `src/state/router.js` (Day 2) · `src/state/prompts.js` (partial — first 2 prompts; Day 2 to fill rest)
@@ -79,7 +84,8 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 
 **Decisions made (also logged in README):**
 - Scaffolded all PRD §16 files at once with stubs that `throw` + `TODO Day N` comments. Trade-off: a bit of noise now, but Claude in future sessions sees the full file map and knows exactly which PRD section to read for each unimplemented file.
-- Added `handlebars`, `sharp`, `pino-http` to deps — implied by PRD §9 (template), §10 (watermark compositing), §3 (logging) but not in the explicit npm list.
+- Added `handlebars`, `sharp`, `pino-http`, `helmet` to deps — implied by PRD §9 (template), §10 (watermark compositing), §3 (logging), and Meet's "security top-notch" mandate.
+- Security hardening pulled forward from Day 5/6 to Day 1: webhook signature verification (both sides), basic auth, phone hashing, log redaction, helmet, body-size caps, `.gitignore` whitelist pattern. Trade-off: ~250 lines of code now vs. retrofitting later — worth it. SECURITY.md added as the single-page threat model.
 - `src/state/prompts.js` only has the first 2 prompts seeded; Day 2 will fill the rest from PRD §5 Phase 2 table.
 
 **Next session — start here:**
