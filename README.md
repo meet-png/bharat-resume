@@ -42,3 +42,4 @@ See PRD §16. One-line summary: `src/` is split by concern — `state/`, `llm/`,
 Mid-build choices that diverged from PRD defaults or resolved an Open Item (PRD §20). Append, don't rewrite.
 
 - 2026-06-19 — Scaffolded with PRD §16 layout. Day 1 only implements `/health` and `/webhook/twilio` echo; all other files are stubs with TODO markers referencing PRD sections.
+- 2026-06-20 — **PRD §7.5 divergence: dropping Anthropic fallback for v1.** Single-provider routing: `gpt-4o-mini` with strict JSON mode for everything; on JSON parse failure, retry once with `gpt-4o-mini` itself (different seed). If quality issues surface during the 100-student test, escalate to `gpt-4o` (same provider) or re-add Anthropic. Saves a signup, an SDK, and ~$5 prepay; loses provider-outage redundancy (acceptable at prototype scale). `ANTHROPIC_API_KEY` in `.env` stays blank — config already tolerates that.

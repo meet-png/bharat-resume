@@ -13,8 +13,8 @@
 
 | Day | Date | Milestone | Status | Notes |
 |---|---|---|---|---|
-| 1 | Thu 19 Jun | Scaffolding + WhatsApp echo | 🟡 Code scaffolded, signups pending | Express server + echo route done locally. Twilio Sandbox / Supabase / Upstash / Razorpay signups not yet done. |
-| 2 | Fri 20 Jun | State machine + info collection | ⬜ Not started | |
+| 1 | Thu 19 Jun | Scaffolding + WhatsApp echo | ✅ Done | Verified live: WhatsApp → Twilio Sandbox → ngrok (static domain `babble-fifteen-rust.ngrok-free.dev`) → Express → TwiML reply. Slightly into Day 2 calendar-wise; not a blocker. |
+| 2 | Fri 20 Jun | State machine + info collection | 🟡 In progress | OpenAI key signup next. |
 | 3 | Sat 21 Jun | LLM rewrite + JD scrape | ⬜ Not started | |
 | 4 | Sun 22 Jun | PDF rendering + watermark | ⬜ Not started | |
 | 5 | Mon 23 Jun | ATS score + payment + edit loop | ⬜ Not started | |
@@ -27,18 +27,20 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 
 ## 2. Current implementation state
 
-**Working (locally, no external services required yet):**
+**Working (verified end-to-end against live services):**
 - Express server boots on `:3000` with pino logging, `helmet`, body-size cap, and `trust proxy: 1`.
 - `GET /health` → `{ ok: true, ts: ... }`.
-- `POST /webhook/twilio` → **signature-validated** (PRD-compliant, rejects forged requests with 403); echoes inbound `Body` back as TwiML on Day 1.
-- `POST /webhook/razorpay` → **HMAC-SHA256 signature validated**; handler stub.
+- `POST /webhook/twilio` → **signature-validated**; Day 1 echo flow verified live via WhatsApp → Twilio Sandbox → ngrok (static `babble-fifteen-rust.ngrok-free.dev`) → Express → TwiML reply.
+- `POST /webhook/razorpay` → **HMAC-SHA256 signature validated**; verifier proven correct (accepts valid, rejects tampered, rejects missing) via `.runtime/smoke-razorpay.js`.
+- Razorpay Payment Link create-and-cancel verified against test-mode API.
+- Supabase: 4 tables + 2 indexes + RLS enabled (`db/schema.sql` applied); `resumes` storage bucket created (private). Service-role connection verified.
+- Upstash Redis (Mumbai): connection, `SET`/`GET`/`EXPIRE`/`DEL` verified; TTL semantics confirmed (required for the 24h session pattern). Redis 8.2.0.
+- OpenAI: `gpt-4o-mini` smoke call returned in <1s for $0.000004; on track for PRD's ₹0.10-0.15/resume.
 - `GET /admin/metrics` → **Basic Auth gated**; handler stub (Day 6).
-- `GET /payment-success` → renders `public/payment-success.html`.
 - `src/state/states.js` — full state constants + linear Phase 2 transition table.
 - `src/jd/parse.js` — Naukri URL detector + generic URL guard.
 - `src/security/{hash,twilioSignature,basicAuth}.js` — phone hashing, webhook validation, admin auth.
-- `src/payment/razorpay.js#verifyWebhookSignature` — implemented (security-critical, didn't wait for Day 5).
-- Pino logger redacts secrets and PII fields by default.
+- Pino logger redacts secrets and PII fields by default. `src/config.js` tolerates empty `.env` values (zod preprocess).
 
 **Scaffolded but not implemented (stubs throw, with `TODO Day N` markers pointing at PRD sections):**
 - `src/state/router.js` (Day 2) · `src/state/prompts.js` (partial — first 2 prompts; Day 2 to fill rest)
@@ -51,14 +53,9 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 - `src/templates/resume.hbs` — head/contact only; sections TODO (Day 4)
 
 **Not yet:**
-- `npm install` (running in background as of Session 1)
-- Twilio Sandbox account + webhook configured
-- Supabase project + schema applied (PRD §13.1)
-- Upstash Redis instance
-- Razorpay test keys
-- Railway deploy
-- ngrok for local Twilio webhook
-- `.env` file populated (`.env.example` is committed)
+- Railway deploy (Day 6 milestone)
+- Day 2 implementation work: state router, LLM extraction/rewrite, prompts.js fill-in (PRD §5 Phase 2 table)
+- Day 3+: JD scraper, PDF render, watermark, ATS scorer, edit loop, telemetry, metrics dashboard
 
 ---
 
@@ -89,13 +86,39 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 - `src/state/prompts.js` only has the first 2 prompts seeded; Day 2 will fill the rest from PRD §5 Phase 2 table.
 
 **Next session — start here:**
-1. Read `BHARAT_RESUME_PRD.md` §6 (state machine), §7.1 (extraction prompt), §13.3 (Redis keys), §5 Phase 2 table.
-2. Implement `src/state/router.js#handle({ from, body })` — load Redis session, route by state, call LLM extract, transition, persist, return reply.
-3. Implement `src/llm/client.js#complete()` with strict JSON mode + Sonnet fallback (PRD §7.5).
-4. Implement `src/llm/extract.js` for one section (name) end-to-end, then duplicate the pattern for the remaining 12.
-5. Fill `src/state/prompts.js` from PRD §5 Phase 2 table.
+1. Read `BHARAT_RESUME_PRD.md` §6 (state machine), §7.1 (extraction prompt), §13.3 (Redis keys), §5 Phase 2 table. Note: §7.5 fallback dropped (single-provider OpenAI per Decisions log).
+2. Implement `src/state/router.js#handle({ phoneHash, body })` — load Redis session, route by state, call LLM extract, transition, persist, return reply.
+3. Implement `src/llm/client.js#complete()` — `gpt-4o-mini`, strict JSON mode (`response_format: { type: 'json_object' }`), one retry on parse failure with the same model.
+4. Implement `src/llm/extract.js` for one section (name) end-to-end against real OpenAI key, then duplicate the pattern for the remaining 12.
+5. Fill `src/state/prompts.js` from PRD §5 Phase 2 table (आप, ≤2 lines per prompt).
 6. Wire `src/routes/twilio.js` to call `state/router#handle` instead of echoing.
-7. Day 2 milestone: complete the full Q&A flow against Redis; eyeball the final `resume_json`.
+7. Per-phone rate limit in Redis (PRD §13.3): 30 msg/60s.
+8. Day 2 milestone: complete the full Q&A flow against Redis; eyeball the final `resume_json`.
+
+### Session 2 — 2026-06-19 evening → 2026-06-20 early morning (Claude Opus 4.7)
+
+**Did:**
+- Hit Day 1 milestone live: WhatsApp echo via Twilio Sandbox → ngrok static domain → Express → TwiML reply.
+- Completed all 7 signups end-to-end (Twilio, ngrok, OpenAI, Supabase, Upstash, Razorpay) — Anthropic deferred (Decisions log entry).
+- Wrote `db/schema.sql` and applied via Supabase SQL Editor. Enabled RLS on all tables as defense in depth.
+- Fixed `src/config.js` to treat empty `.env` values as undefined (was crashing on `SUPABASE_URL=` empty after Twilio-only fill).
+- Downloaded latest ngrok 3.39.8 manually (winget's 3.3.1 didn't know `--domain`); installed to `C:\Users\ACER\tools\ngrok\`. Static domain pinned.
+- `.runtime/` directory holds dev/smoke scripts; gitignored. Three smoke tests live there: OpenAI, Supabase, Redis, Razorpay (with Payment Link + HMAC verify round-trip).
+- Pino logger update silences ioredis URL leaks on connection failure (`r.on('error', () => {})` in smoke script).
+
+**Surprises:**
+- ngrok's free static domain creation now seems gated to paid; the auto-provisioned one each account gets at signup is the workable freebie.
+- OpenAI billing is prepay-only since 2024; adding a card ≠ adding credits.
+- Upstash's connection-string UI sometimes omits the `rediss://` scheme. Got Meet's redis password leaked into chat once; rotated immediately.
+
+**Decisions made (also logged in README "Decisions log"):**
+- Drop Anthropic for v1 (PRD §7.5 divergence). Single-provider OpenAI with same-model retry. Quality risk acceptable at 100-student scale.
+- Empty `.env` values are now treated as undefined in `src/config.js` (via `z.preprocess`), so partial-fill `.env` doesn't crash boot.
+
+**Open items / things to clean up:**
+- ngrok 3.39.8 lives at a hand-installed path; if Meet ever runs `winget upgrade --all`, winget will reinstall the older 3.3.1 and PATH might prefer the wrong one. Long-term fix: uninstall the winget version. Skipped for now.
+- The deprecated `--domain` flag works on 3.39.8 but logs a warning. Switch to `--url=https://...ngrok-free.dev` next ngrok restart.
+- Razorpay live KYC needs to be kicked off by Meet in parallel (2-4 days). Not blocking.
 
 ---
 
@@ -103,15 +126,16 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 
 Carry these forward each session until resolved. Add new ones whenever a build decision needs Meet's input.
 
-- [x] **GitHub username** — `meet-png`. Repo live: https://github.com/meet-png/bharat-resume (public).
-- [x] **Push timing** — pushed Day 1 after security hardening. `.env` confirmed gitignored.
-- [x] **Twilio Sandbox** — signed up, joined sandbox via WhatsApp, `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` / `TWILIO_WHATSAPP_FROM` in `.env`. Webhook URL not yet wired (pending ngrok).
-- [ ] **ngrok** — needed to expose local `:3000` to Twilio Sandbox for the Day 1 echo test. In progress.
-- [ ] **OpenAI** — needed Day 2 for info extraction + JD keyword + rewrite prompts.
-- [ ] **Anthropic** — needed Day 2 as fallback model per PRD §7.5.
-- [ ] **Supabase** — project created? Schema from PRD §13.1 applied? Storage bucket `resumes` created?
-- [ ] **Upstash Redis** — free tier instance provisioned? `REDIS_URL` ready?
-- [ ] **Razorpay test mode** — test keys generated? Webhook secret? Live-mode KYC kicked off in parallel?
+- [x] **GitHub username** — `meet-png`. Repo: https://github.com/meet-png/bharat-resume (public).
+- [x] **Push policy** — end of each Claude Code session. One commit (or small batch).
+- [x] **Twilio Sandbox** — signed up + joined + creds + webhook URL configured + Day 1 echo verified live.
+- [x] **ngrok** — installed 3.39.8 manually at `C:\Users\ACER\tools\ngrok\ngrok.exe`. Authtoken registered. Static domain `babble-fifteen-rust.ngrok-free.dev` pinned.
+- [x] **OpenAI** — key in `.env`; billing topped up; smoke verified.
+- [x] **Anthropic** — **dropped for v1** per Decisions log.
+- [x] **Supabase** — Mumbai project, schema applied via `db/schema.sql`, `resumes` private bucket, RLS enabled, connection verified.
+- [x] **Upstash Redis** — Mumbai regional instance, TLS URL with `rediss://`, full round-trip verified. Password rotated once after a UI mishap.
+- [x] **Razorpay test mode** — keys + webhook secret in `.env`. Test Payment Link creation verified; HMAC verifier proven correct.
+- [ ] **Razorpay live KYC** — Meet to submit PAN/Aadhaar/bank in dashboard. 2-4 day review. Run in parallel; not blocking.
 - [ ] **PRD §20 open items** — Naukri DOM selector (Day 3), ATS keyword count weighting (Day 5), edit iteration limit (Day 6), per-prompt tone tuning (Day 2). Resolve as we hit each.
 
 ---
