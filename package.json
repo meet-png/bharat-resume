@@ -10,7 +10,8 @@
   },
   "scripts": {
     "start": "node src/server.js",
-    "dev": "nodemon src/server.js"
+    "dev": "nodemon src/server.js",
+    "check": "node .runtime/check.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.0",
@@ -23,6 +24,8 @@
     "ioredis": "^5.4.1",
     "nanoid": "^3.3.7",
     "openai": "^4.73.0",
+    "pdf-lib": "^1.17.1",
+    "pdf-to-png-converter": "^4.1.1",
     "pino": "^9.5.0",
     "pino-http": "^10.3.0",
     "puppeteer": "^23.10.0",

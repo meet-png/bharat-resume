@@ -6,6 +6,7 @@
 1. Read this file before touching code.
 2. Read PRD sections referenced under "Next session — start here".
 3. At end of session: update §1 status grid, append a §3 session entry, refresh §4 open questions, save the file. Keep it under ~250 lines — trim §3 once entries cross 30 days old.
+4. **Before committing ANY change:** run `npm run check`. It must finish with `✅ ALL CHECKS PASSED — safe to commit`. If anything fails, fix the regression OR explicitly tell Meet what's broken and get permission to proceed — never silently commit with a red check. See §6 below for the contract.
 
 ---
 
@@ -16,9 +17,9 @@
 | 1 | Thu 19 Jun | Scaffolding + WhatsApp echo | ✅ Done | Verified live: WhatsApp → Twilio Sandbox → ngrok (static domain `babble-fifteen-rust.ngrok-free.dev`) → Express → TwiML reply. |
 | 2 | Fri 20 – Sun 21 Jun | State machine + info collection | ✅ Done | Full Phase 2 flow live: 13 sections, sufficiency-aware extraction, role-aware clarifications, GitHub repo enrichment for projects, 3-path JD (URL / role-name / generic / full JD text), Hinglish+English only (Latin script), 4 variants per state. 7-block offline smoke (`.runtime/smoke-router.js`) all pass. Verified end-to-end on WhatsApp. |
 | 3 | Sat 21 Jun | LLM rewrite + JD scrape | ✅ Done | Generation pipeline runs in ~8s (scrape + keywords + rewrite). Rewriter voice locked to `docs/template-reference.md` (Meet's actual resume). Preview shows Meet-style summary, action-verb bullets with selective `**bold**` on metrics, real keyword intersection (not raw JD list). 4 field-test bugs fixed: name re-asked, project link never asked, cert link never asked, weak preview / inflated keyword stuffing. |
-| 4 | Sun 22 Jun | PDF rendering + watermark | 🟡 Starting | Goal: WhatsApp delivers a real PDF (watermarked, ATS-unreadable on free tier per PRD §10). |
+| 4 | Sun 22 Jun | PDF rendering + watermark | ✅ Done | WhatsApp delivers a real PDF: rewriter (Meet-template voice + 2-3 multi-angle bullets) → Handlebars HTML (Georgia + reference palette) → Puppeteer PDF → rasterized watermark → Supabase upload → 60s signed URL → Twilio `<Media>`. ~13s end-to-end. Six template-quality issues fixed (multi-metric bullets, per-entry tech stack inline italic, coursework state, achievement sufficiency, PoR pending accumulator, "Your skills matching the JD" labels real intersection). Regression contract live: `npm run check`. |
+| 5 | Mon 23 Jun | ATS score + payment + edit loop | ⬜ Next | ATS scorer must reward bullet density + metric count, not just keyword match (Meet's note). Then Razorpay payment links + webhook flow + clean-PDF unlock. Free-text edit loop. |
 | 4 | Sun 22 Jun | PDF rendering + watermark | ⬜ Not started | |
-| 5 | Mon 23 Jun | ATS score + payment + edit loop | ⬜ Not started | |
 | 6 | Tue 24 Jun | Telemetry, dashboard, deploy, dry run | ⬜ Not started | |
 | 7 | Wed 25 Jun | Launch to 100 | ⬜ Not started | |
 
@@ -182,7 +183,43 @@ Carry these forward each session until resolved. Add new ones whenever a build d
 
 ---
 
-## 5. Files & locations cheat sheet
+## 6. Regression contract — "must keep working"
+
+`npm run check` runs `.runtime/check.js` which invokes three test files. They take ~2 min total and burn ~$0.05 of OpenAI per run. Each is a real end-to-end test against live OpenAI, Supabase, and Redis.
+
+**The contract:** anything below is currently verified working. If a future edit breaks any of these, the check fails and you DO NOT commit until it's fixed (or Meet has explicitly approved the change in behavior).
+
+### 6.1 `smoke-router.js` — 8 blocks, ~75s
+- **B1 reset regression**: `reset` → both messages, "hello" after reset, "haan" after reset routes into AWAITING_NAME.
+- **B2 full Phase 2 happy path**: 16-step linear flow (incl. AWAITING_COURSEWORK after skills) lands in DELIVERED with PDF preview.
+- **B3 JD generic mode**: "no specific role" sets `jd_generic`, advances to AWAITING_SKILLS.
+- **B4 achievement negatives**: `no` / `nahi` / `nope` / `none` / `nothing` all accepted as skip-equivalents → reach delivery.
+- **B5 experience sufficiency**: vague input stays in state with targeted follow-up; detailed input advances with merged data including company + metric.
+- **B6 JD classification**: short-line → `role`, URL → `url`, long with markers → `jd`, generic phrase → `generic`. Heuristic only, no LLM.
+- **B7 role-aware clarifications**: same vague input across 5+ diverse roles produces ≥3 unique role-tailored clarifications (Marketing → reach/CTR; Engineering → latency/scale; etc.).
+- **B8 Day 3 generation pipeline**: rewrite + keyword extract complete in <15s; rewritten JSON preserves company names, metrics, no Devanagari leaks; preview text contains name + summary.
+
+### 6.2 `test-all-4.js` — 4 bug-class regressions, ~25s
+- **Bug 1 NAME accepted liberally**: "Meet Kabra" stored on first try, state advances to AWAITING_EMAIL.
+- **Bug 2 PROJECT LINK before IMPACT**: vague project description triggers link question first, NEVER accuracy/metric. After "no link" decline, impact question fires.
+- **Bug 3 CERT LINK required**: cert name without URL prompts for verification link; "no link" accepts and advances.
+- **Bug 4 PREVIEW quality**: skills section present, all projects shown, "Your skills matching the JD" computes REAL intersection (no false short-keyword matches like "R" matching "Powe[r] BI"), bullets render `*bold*` via WhatsApp markup.
+
+### 6.3 `test-day4.js` — end-to-end PDF delivery, ~25s
+- State advances to DELIVERED; `resume_json_rewritten` populated.
+- Reply is `{ text, media }` object; media is HTTPS signed URL.
+- `pdf_storage_path` + `pdf_signed_url` on session.
+- Within Twilio 15s webhook budget.
+- Signed URL returns 200, `application/pdf` content-type, valid `%PDF-` header, >5KB.
+
+### 6.4 Flake handling
+LLM responses and Supabase uploads can intermittently fail under network jitter or rate limits. Policy: **re-run `npm run check` once** before assuming a real regression. If it fails twice in a row on the same check → real regression, fix.
+
+**Known mild flake source:** `src/state/generator.js` parallelises keywords + rewrite with an 11s rewrite timeout. Cold-start OpenAI calls occasionally take 10-12s on complex seeds, which trips the smoke's Block 8. Bumping the timeout to 13s would reduce flake but might push real users over Twilio's 15s webhook window. Park as a future cleanup once we have observability on production rewrite latencies.
+
+---
+
+## 7. Files & locations cheat sheet
 
 - PRD: `BHARAT_RESUME_PRD.md` (lives in Meet's `Downloads/`; not in repo).
 - This file: `PROGRESS.md`.
@@ -190,3 +227,4 @@ Carry these forward each session until resolved. Add new ones whenever a build d
 - Env shape: `.env.example`. Real `.env` is local-only (gitignored).
 - Code layout: PRD §16 — `src/{routes,state,llm,jd,resume,payment,store,telemetry,templates}/`.
 - Postgres schema source of truth: PRD §13.1 (apply manually in Supabase SQL editor for now; consider a `db/schema.sql` once Meet signs up).
+- Regression check: `npm run check` → runs `.runtime/check.js` → runs three tests defined in §6. Must pass before any commit.

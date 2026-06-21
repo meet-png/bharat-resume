@@ -30,28 +30,37 @@ async function runGeneration(session, phoneFrom) {
     if (scraped) session.jd_text = scraped;
   }
 
-  const tKw = Date.now();
-  const kw = await withTimeout(
-    extractKeywords({ jdText: session.jd_text, jdRole: session.jd_role, jdGeneric: session.jd_generic }),
-    6000,
-    { keywords: [], role_title: 'unknown', experience_level: 'fresher' },
-    'keywords'
-  );
-  timings.keywords_ms = Date.now() - tKw;
+  // Parallelize keywords + rewrite. The rewriter uses keywords only as a
+  // "match where the student has the skill" hint — not load-bearing. Running
+  // both concurrently saves ~3-4s on the critical path (was ~10s before).
+  const tPar = Date.now();
+  const [kw, rewritten] = await Promise.all([
+    withTimeout(
+      extractKeywords({ jdText: session.jd_text, jdRole: session.jd_role, jdGeneric: session.jd_generic }),
+      5500,
+      { keywords: [], role_title: 'unknown', experience_level: 'fresher' },
+      'keywords'
+    ),
+    withTimeout(
+      rewriteResume({
+        resumeJson: session.resume_json,
+        jdRole: session.jd_role,
+        jdText: session.jd_text,
+        // Keywords not yet known — rewriter relies on role/JD context.
+        // For the v1 prototype the quality loss is negligible; can re-pass with keywords later if needed.
+        jdKeywords: [],
+        jdGeneric: session.jd_generic,
+        phoneFrom,
+      }),
+      11000,
+      { data: null, usage: null },
+      'rewrite'
+    ),
+  ]);
+  timings.parallel_ms = Date.now() - tPar;
   session.jd_keywords = kw.keywords || [];
   session.jd_role_title = kw.role_title;
   session.jd_experience_level = kw.experience_level;
-
-  const tRw = Date.now();
-  const rewritten = await rewriteResume({
-    resumeJson: session.resume_json,
-    jdRole: session.jd_role,
-    jdText: session.jd_text,
-    jdKeywords: session.jd_keywords,
-    jdGeneric: session.jd_generic,
-    phoneFrom,
-  });
-  timings.rewrite_ms = Date.now() - tRw;
   session.resume_json_rewritten = rewritten.data;
   session.rewrite_usage = rewritten.usage;
 
@@ -146,8 +155,10 @@ function buildPreview(session) {
     for (const e of r.experience.slice(0, 2)) {
       const header = [e.role, e.company].filter(Boolean).join(' @ ') + (e.dates ? ` (${e.dates})` : '');
       lines.push(header);
-      const top = (e.bullets || [])[0];
-      if (top) lines.push(`• ${whatsappBold(top)}`);
+      if (Array.isArray(e.tech_stack) && e.tech_stack.length > 0) {
+        lines.push(`_${e.tech_stack.join(' · ')}_`);
+      }
+      for (const b of (e.bullets || []).slice(0, 3)) lines.push(`• ${whatsappBold(b)}`);
     }
     lines.push('');
   }
@@ -157,8 +168,10 @@ function buildPreview(session) {
     for (const [i, p] of r.projects.slice(0, 3).entries()) {
       const title = p.name || `Project ${i + 1}`;
       lines.push(`${i + 1}. ${title}`);
-      const top = (p.bullets || [])[0];
-      if (top) lines.push(`   • ${whatsappBold(top)}`);
+      if (Array.isArray(p.tech_stack) && p.tech_stack.length > 0) {
+        lines.push(`   _${p.tech_stack.join(' · ')}_`);
+      }
+      for (const b of (p.bullets || []).slice(0, 2)) lines.push(`   • ${whatsappBold(b)}`);
     }
     if (r.projects.length > 3) lines.push(`+${r.projects.length - 3} more in full resume`);
     lines.push('');

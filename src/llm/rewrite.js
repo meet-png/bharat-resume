@@ -48,10 +48,29 @@ VOICE — modeled on a high-bar reference resume (see docs/template-reference.md
    - Dense with metrics: every claim has a number behind it WHERE THE STUDENT PROVIDED ONE. Don't invent numbers. Skip the number if the student didn't give one.
    - Mentions degree + year + 1-2 strongest concrete projects/outcomes/skills.
 
-2. BULLETS — selective bold on the metric/outcome:
+2. BULLETS — UP TO 2-3 per entry, selective bold on metric/outcome:
+
+   *** HARD RULE: NUMBER OF OUTPUT BULLETS ≤ NUMBER OF DISTINCT FACTS IN INPUT. ***
+   If the input only contains 1 sentence of work, you output 1 bullet. Period.
+   If the input contains 2 distinct facts (e.g. "cleaned 50K rows AND built 3 dashboards"), output up to 2 bullets — one per fact.
+   Three bullets only if THREE distinct quantifiable facts exist in the input.
+
+   BANNED patterns (these are INVENTION — they violate PRD §7.2 rule 1):
+     • "Achieved strong [adjective]" / "Demonstrated [soft skill]" / "Enhanced [generic]"
+     • "Through meticulous [process]" — process-flavored padding
+     • "Provided real-time insights" — vague unless the input said so
+     • Any bullet without either (i) a number from input, OR (ii) a specific named deliverable from input
+   If a bullet you're about to write contains only soft adjectives or unverifiable claims, DELETE it instead of writing it.
+
+   When you DO have 2-3 distinct input facts, structure across angles:
+     • Bullet 1: ACTION + SCALE  (what they built / led + the size/volume from input)
+     • Bullet 2: QUALITY         (accuracy / effectiveness / named flagship from input)
+     • Bullet 3: IMPACT          (time/cost saved / business outcome / shipped — from input)
+   Two strong, fact-grounded bullets > three with one invented.
+
    Use markdown \`**bold**\` markers around the metric phrase. NEVER bold the action verb.
 
-   Bullet shape patterns (pick the one that fits each bullet — don't copy text):
+   Bullet shape patterns (mix and match — don't copy text):
    a) VERB + context + " — " + **bold outcome**:
       "Directed Rajasthan's largest student MUN — 450+ delegates, ₹3 L+ budget — **zero budget deficit** and zero day-of failures."
    b) VERB + **bold metric** + mechanism; second clause:
@@ -60,6 +79,8 @@ VOICE — modeled on a high-bar reference resume (see docs/template-reference.md
       "Architected a weekly-refreshing ETL pipeline ingesting 5 trade sources into an 8-table star schema — **12,828 rows, 20/20 validation checks on cold run**."
    d) Triple-action with semicolons and selective bolds:
       "Achieved **>85% prompt-cache hit ratio** via byte-stable prompts; JSON Schema contract **eliminated parsing errors**; orchestrator-side URL injection killed a prompt-injection attack class."
+
+   DENSITY RULE: across the bullets of a single entry, aim for ≥2 distinct quantifiable metrics. If the input data only supports one, write fewer bullets rather than padding.
 
 3. ACTION VERB PALETTE (use these or synonyms native to the role's domain):
    - Software/Eng: Architected, Built, Shipped, Deployed, Refactored, Automated, Optimized, Engineered, Implemented
@@ -78,12 +99,7 @@ VOICE — modeled on a high-bar reference resume (see docs/template-reference.md
    - Middle dot ( · ) NOT used in bullets; only in tech_stack render (template-side).
    - Indian numerals where natural: ₹3,00,000 / ₹18,310 Cr.
 
-5. NEVER:
-   - Invent metrics. If student said "good accuracy", write "Achieved strong accuracy on the held-out test set" — NOT "Achieved 92% accuracy".
-   - Pad with soft adjectives ("very", "extremely", "highly", "passionate").
-   - Use vague verbs ("worked on", "helped with", "assisted").
-   - Claim a skill not in the input.
-   - Bold the action verb. Bold goes on the metric/outcome.
+5. NEVER: invent metrics, claim skills not in input, use vague verbs ("worked on", "helped with", "assisted"), pad with soft adjectives, or bold the action verb.
 
 ═══════════════════════════════════════════════════
 ${jdContext}
@@ -103,7 +119,7 @@ OUTPUT SCHEMA (return JSON only, this exact shape):
   "summary": string,
   "education": [{ "degree": string, "college": string, "branch": string | null, "location": string | null, "dates": string | null, "cgpa": string | null, "coursework": string | null }],
   "skills": { "languages": [string], "frameworks": [string], "tools": [string], "databases": [string], "other": [string] },
-  "experience": [{ "role": string, "company": string, "location": string | null, "dates": string | null, "bullets": [string] }],
+  "experience": [{ "role": string, "company": string, "location": string | null, "dates": string | null, "tech_stack": [string], "bullets": [string] }],
   "projects": [{ "name": string, "tech_stack": [string], "dates": string | null, "github_url": string | null, "bullets": [string] }],
   "por": [{ "role": string, "organization": string, "dates": string | null, "bullets": [string] }],
   "certifications": [{ "name": string, "url": string | null }],
@@ -114,7 +130,7 @@ Bullets are PLAIN STRINGS — include the \`**...**\` markdown markers around th
 
 Sections the student left empty: keep as empty array (not null, not omitted).`;
 
-  const result = await complete({ system, user: 'rewrite the resume now', maxTokens: 3500, temperature: 0.35 });
+  const result = await complete({ system, user: 'rewrite the resume now', maxTokens: 2400, temperature: 0.2 });
 
   if (phoneFrom && result.data) {
     result.data.phone = String(phoneFrom).replace(/^whatsapp:/i, '').replace(/[^\d+]/g, '');

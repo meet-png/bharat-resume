@@ -1,8 +1,54 @@
 // HTML → PDF via Puppeteer. PRD §9.5.
-// TODO Day 4: set page content, await document.fonts.ready, page.pdf({ format: 'A4', margin }).
+// Reuses a browser singleton (separate from jd/scrape.js's; PDF rendering and
+// JD scraping have different lifetimes so we don't share). Waits for fonts to
+// settle before generating.
+const logger = require('../logger');
 
-async function htmlToPdf(_html) {
-  throw new Error('htmlToPdf not implemented (Day 4)');
+let _browser = null;
+async function getBrowser() {
+  if (_browser && _browser.isConnected()) return _browser;
+  const puppeteer = require('puppeteer');
+  _browser = await puppeteer.launch({
+    headless: 'new',
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--font-render-hinting=none',
+    ],
+  });
+  return _browser;
 }
 
-module.exports = { htmlToPdf };
+async function htmlToPdf(html) {
+  if (!html || typeof html !== 'string') throw new Error('htmlToPdf: html string required');
+  const t0 = Date.now();
+  let page;
+  try {
+    const browser = await getBrowser();
+    page = await browser.newPage();
+    await page.setContent(html, { waitUntil: 'networkidle0', timeout: 20000 });
+    // PRD §9.5: wait for fonts before snapshot.
+    await page.evaluateHandle('document.fonts.ready');
+
+    const pdf = await page.pdf({
+      format: 'A4',
+      printBackground: true,
+      margin: { top: '0mm', bottom: '0mm', left: '0mm', right: '0mm' },
+      preferCSSPageSize: true,
+    });
+    logger.info({ ms: Date.now() - t0, bytes: pdf.length }, 'html→pdf rendered');
+    return pdf;
+  } finally {
+    if (page) await page.close().catch(() => {});
+  }
+}
+
+async function shutdownBrowser() {
+  if (_browser) {
+    try { await _browser.close(); } catch {}
+    _browser = null;
+  }
+}
+
+module.exports = { htmlToPdf, shutdownBrowser };

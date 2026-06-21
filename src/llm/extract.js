@@ -62,6 +62,18 @@ ONLY set name=null and ask a clarification if the input is clearly NOT a name: a
     },
   },
 
+  // Optional coursework collection — single line; merges into education[0].coursework.
+  AWAITING_COURSEWORK: {
+    instruction: `Extract a coursework string — a comma- or middle-dot-separated list of course names the student named (DSA, Operating Systems, ML, Statistics, etc.). Title-case items. Keep the original separator if the student used one. If "skip" or no clear coursework, set to null.`,
+    shape: '{ "coursework": string | null, "clarification_needed": string | null }',
+    merge: (rj, x) => {
+      if (!x.coursework) return;
+      if (!rj.education) rj.education = [];
+      if (!rj.education[0]) rj.education.push({});
+      rj.education[0].coursework = x.coursework;
+    },
+  },
+
   AWAITING_SKILLS: {
     instruction: `Categorize the listed skills into 5 buckets. The buckets are guidelines — adapt their meaning to the TARGET ROLE in the JD context above:
 
@@ -76,34 +88,52 @@ Include EVERY skill the student mentioned. When ambiguous about which bucket, pr
     merge: (rj, x) => { rj.skills = x.skills || { languages: [], frameworks: [], tools: [], databases: [], other: [] }; },
   },
 
-  // EXPERIENCE — sufficiency-aware AND role-aware. Clarification phrasing must
-  // adapt to whatever target role is in JD context (no hardcoded tech bias).
+  // EXPERIENCE — multi-bullet, multi-angle sufficiency. Drives bullet density.
   AWAITING_EXPERIENCE: {
-    instruction: `Extract internship/job experience. Required pieces for "sufficient":
+    instruction: `Extract internship/job experience. tech_stack = the specific tools / libraries / methods the student actually used in THIS experience (not their global skills).
+
+SUFFICIENCY for the experience entry — ALL THREE must hold:
   (a) role + company (who/where)
-  (b) ≥1 bullet describing what they DID (concrete action specific to the target role's domain)
-  (c) impact: a measurable outcome relevant to the target role (see TARGET ROLE / JD block above), OR a concrete deliverable shipped
+  (b) ≥2 bullets in the bullets array
+  (c) bullets span ≥2 distinct METRIC ANGLES across:
+        SCALE / VOLUME — data points, users, records, teams, budget, transactions, requests
+        QUALITY        — accuracy %, correctness rate, error reduction, NPS, % improvement
+        IMPACT         — time saved, cost saved, business outcome, deployed/shipped, decisions enabled
 
-If the message ADDS to an existing partial experience already in resume_json.experience[0], merge — do NOT discard prior good fields. Bullets append.
+If the message extends existing pending experience (already in resume_json.experience[0]), MERGE — append new bullets, never overwrite prior good fields.
 
-After extraction, evaluate sufficiency:
-- If (a), (b), AND (c) are present → clarification_needed = null (we advance).
-- If something is missing → clarification_needed = a SHORT, Hinglish/English, Latin-script question targeted at ONLY the missing piece.
+EACH NEW FOLLOW-UP ANSWER → ONE NEW BULLET. Do NOT merge multiple metrics into a single bullet at extraction time. Let the rewriter compose final phrasing.
 
-CRITICAL — DO NOT copy these examples verbatim. They're patterns to adapt to the TARGET ROLE:
-  - If target role is marketing-flavored: missing impact → ask about campaign reach, CTR, leads, conversions, pipeline
-  - If target role is engineering-flavored: missing impact → ask about latency, scale (RPS / QPS / users), uptime, perf delta, bug count reduced
-  - If target role is sales-flavored: missing impact → ask about revenue, quota %, deals closed, pipeline created
-  - If target role is design-flavored: missing impact → ask about users affected, adoption %, conversion lift, A/B test result
-  - If target role is finance/ops-flavored: missing impact → ask about cost saved, audit findings, time-to-close, error rate
-  - If target role is civil/mechanical/non-software engineering: missing impact → ask about project size, budget, timeline saved, safety/quality outcome
-  - If target role is medical/teaching/social: missing impact → ask about patients/students/people served, outcome improved, program scaled
-  - For roles not in the above buckets: pick a metric NATIVE to that role's industry — don't default to software metrics.
+DECISION TREE (one question per turn):
+1. role+company missing → ask for them. Adapt example role titles to TARGET ROLE.
+2. <1 bullet present → ask for the concrete action they did. "Specific kya kaam kiya tha waha?"
+3. <2 bullets OR all bullets cover the SAME angle:
+     Identify the missing angle from the three above. Ask ONE targeted question for THAT angle:
+       Missing SCALE: "Kitna data tha / kitne users / kitne records / kitna budget? Specific number do."
+       Missing QUALITY: "Kya accuracy / quality / effectiveness mili — % ya concrete metric?"
+       Missing IMPACT: "Isse kitna time / cost bacha, ya kya business outcome aaya?"
+     Adapt vocabulary to TARGET ROLE domain (marketing → CTR/leads; eng → latency/RPS; civil → safety/timeline; etc.).
+4. Any bullet has soft qualifier without a number → ask for specific number for THAT bullet.
+5. All three sufficient → clarification_needed = null.
 
-Same role-awareness for "missing action" (ask for an action verb appropriate to the role) and "missing role" (give example titles from the target role's domain, not generic tech examples).
+WORKED EXAMPLE:
+Initial: "Worked at Razorpay as SWE intern May-Jul 2025, built a payment retry service in Node.js"
+  Extract: role="SWE Intern", company="Razorpay", dates="May-Jul 2025", tech_stack=["Node.js"], bullets=["Built a Node.js payment retry service"]
+  → 1 bullet, action only. Missing scale, quality, impact.
+  → "Kitne daily transactions handle karte the / kitna data scale tha?"
 
-NEVER re-ask the whole thing.`,
-    shape: '{ "experience": { "role": string | null, "company": string | null, "location": string | null, "dates": string | null, "bullets": [string] } | null, "clarification_needed": string | null }',
+Follow-up: "around 50K daily transactions"
+  Extract: bullets=["Handled ~50K daily transactions"] (new bullet)
+  Merged total: 2 bullets covering action + scale. Still missing quality OR impact.
+  → "Failures kitne % reduce hue, ya kya specific outcome aaya?"
+
+Follow-up: "reduced failed transactions by 18%"
+  Extract: bullets=["Reduced failed transactions by 18%"]
+  Merged: 3 bullets covering action + scale + impact. SUFFICIENT.
+  → clarification_needed = null.
+
+Apply same role-awareness as before: clarification vocabulary, action verbs, example titles all calibrate to TARGET ROLE.`,
+    shape: '{ "experience": { "role": string | null, "company": string | null, "location": string | null, "dates": string | null, "bullets": [string], "tech_stack": [string] } | null, "clarification_needed": string | null }',
     merge: (rj, x) => {
       if (!x.experience) {
         if (!rj.experience) rj.experience = [];
@@ -117,6 +147,10 @@ NEVER re-ask the whole thing.`,
       }
       if (Array.isArray(x.experience.bullets) && x.experience.bullets.length > 0) {
         exp.bullets = (exp.bullets || []).concat(x.experience.bullets);
+      }
+      if (Array.isArray(x.experience.tech_stack) && x.experience.tech_stack.length > 0) {
+        const set = new Set([...(exp.tech_stack || []), ...x.experience.tech_stack]);
+        exp.tech_stack = [...set];
       }
     },
   },
@@ -137,7 +171,10 @@ Only set name=null if the message has no information about what was built.
 A project is SUFFICIENT only when all four are true:
   (a) name (extracted liberally as above)
   (b) tech_stack OR a description of what it does
-  (c) at least one bullet with a SPECIFIC NUMBER ("85%", "200 users", "12K rows") — soft qualifiers ("good", "many", "great", "fast") do NOT count
+  (c) ≥2 bullets in bullets[], AND bullets span ≥2 distinct METRIC ANGLES across:
+        SCALE / VOLUME — data points, users, records, requests, dataset size, transactions
+        QUALITY        — accuracy %, F1, precision, error rate, NPS, % improvement
+        IMPACT         — time saved, cost saved, business outcome, latency, throughput, deployed/shipped
   (d) github_url is a real URL, OR pending_project._link_declined === true
 
 LINK-DECLINE DETECTION:
@@ -157,14 +194,25 @@ CASE C — (a) and (b) present, (d) missing AND _link_declined NOT true:
     "GitHub link bhej dijiye? Ya deployed URL / demo? 'no link' agar private hai."
     "Repo link ya live URL? 'no link' agar nahi share kar sakte."
 
-CASE D — link sorted (URL present OR _link_declined=true) AND (c) vague/missing:
-  Ask ONLY for a specific number. Adapt to the project type and TARGET ROLE.
-  Examples:
-    Tech project: "Cool. Exact accuracy number kya tha — 85%? 92%?"
-    Marketing: "Campaign reach kya thi, CTR kitna improve hua?"
-    Design: "Kitne users tak pahuncha, adoption / conversion lift kya tha?"
+CASE D — link sorted AND <2 bullets OR <2 distinct angles in existing bullets:
+  Identify which angle is missing from the existing bullets. Ask ONE targeted question for THAT angle.
+  EACH FOLLOW-UP ANSWER → ONE NEW BULLET. Do NOT merge multiple metrics into a single bullet.
+  Examples (adapt to TARGET ROLE):
+    Tech project missing SCALE: "Kitna data tha — dataset size, users, ya requests count?"
+    Tech project missing QUALITY: "Exact accuracy / F1 kya thi — 85%? 92%?"
+    Tech project missing IMPACT: "Latency / throughput / time saved kya tha?"
+    Marketing missing SCALE: "Audience reach kya thi — kitne impressions / users?"
+    Marketing missing QUALITY: "CTR / conversion rate kitna improve hua?"
+    Marketing missing IMPACT: "Pipeline / revenue / leads kitne aaye?"
+    Design missing SCALE: "Kitne users tak pahuncha?"
+    Design missing QUALITY: "A/B test result kya tha?"
+    Design missing IMPACT: "Adoption / conversion lift kitna?"
+    Civil/Mech missing SCALE: "Project size — budget, sq ft, units?"
+    Civil/Mech missing QUALITY: "Safety / spec compliance outcome?"
+    Civil/Mech missing IMPACT: "Timeline saved / cost reduced kitna?"
+    Adapt to any role — pick metrics native to that domain.
 
-CASE E — all four ✓ → clarification_needed = null.
+CASE E — all four ✓ (≥2 bullets, ≥2 angles, link sorted) → clarification_needed = null.
 
 WORKED EXAMPLES (study these — they show exactly what to output):
 
@@ -224,12 +272,57 @@ ROLE-NATIVE METRICS for CASE D — adapt to TARGET ROLE in JD context:
     },
   },
 
+  // POR — multi-bullet, multi-angle. Pattern matches Meet's reference resume:
+  // event count + participant count + named flagship items / outcomes.
+  // Single pending POR entry accumulates across turns (like pending_project).
   AWAITING_POR: {
-    instruction: 'Extract a leadership/responsibility role. Role e.g. "Class Representative", "Club Lead", "MUN Secretary", "Event Organizer". Organization is the college/club/society name. Bullets are factual descriptions of what they did. NEVER invent.',
+    instruction: `Extract a leadership / position-of-responsibility role. Examples of valid roles: "Class Representative", "Club Lead", "MUN Secretary", "Event Organizer", "NSS Coordinator", "Society Head", "Sports Captain".
+
+SUFFICIENCY for the PoR entry — ALL THREE must hold:
+  (a) role + organization (what role, which club/society/program)
+  (b) ≥2 bullets in bullets[]
+  (c) bullets span ≥2 distinct ANGLES across:
+        SCALE — # events organized, # participants/delegates, budget handled, team size led
+        QUALITY — named flagship outcomes ("flagship event X", "won inter-college Y"), deficit/excess metrics
+        IMPACT — funds raised, sponsorships secured, attendees, retention, % growth year-over-year
+
+Pending PoR entry lives in resume_json.pending_por (similar to pending_project). Merge new bullets into pending across turns. Once sufficient, router commits to por[] array.
+
+DECISION TREE (one question per turn):
+1. role + organization missing → ask both.
+2. <1 bullet → ask for concrete action: "Kya specific kaam kiya tha is role mein?"
+3. <2 bullets OR all bullets cover the same angle → ask for the missing angle:
+     Missing SCALE: "Kitne events organize kiye / kitne participants the / kitna budget?"
+     Missing QUALITY: "Koi flagship event ya named outcome — top kya achieve kiya?"
+     Missing IMPACT: "Sponsorships / funds raised / member growth — koi specific number?"
+4. Any vague bullet → ask for specific number for that bullet.
+5. All ≥2 bullets covering ≥2 angles + role+org present → clarification_needed = null.
+
+WORKED EXAMPLE:
+Initial: "I was MUN secretary at our college MUN society 2024"
+  Extract: role="MUN Secretary", organization="College MUN Society", dates="2024", bullets=[]
+  → 0 bullets. Ask: "Specific kya kaam kiya tha — events organize kiye, team coordinate kiye?"
+
+Follow-up: "organized 2 MUNs with 450+ delegates total, secured ₹3 lakh budget"
+  Extract: bullets=["Organized 2 MUNs with 450+ delegates", "Secured ₹3 lakh budget"]
+  → 2 bullets, angles = scale (delegates) + scale (budget). Still need quality OR impact.
+  → "Koi flagship event ya named outcome — zero deficit, sponsorship deals, etc?"
+
+Follow-up: "secured 8 sponsorships, zero budget deficit"
+  Extract: bullets=["Secured 8 sponsorships", "Closed with zero budget deficit"]
+  → Merged: 4 bullets covering scale + impact + quality. SUFFICIENT.
+  → clarification_needed = null.`,
     shape: '{ "por": { "role": string | null, "organization": string | null, "dates": string | null, "bullets": [string] } | null, "clarification_needed": string | null }',
     merge: (rj, x) => {
-      if (!rj.por) rj.por = [];
-      if (x.por && (x.por.role || x.por.organization)) rj.por.push(x.por);
+      if (!x.por) return;
+      if (!rj.pending_por) rj.pending_por = {};
+      const p = rj.pending_por;
+      for (const k of ['role', 'organization', 'dates']) {
+        if (x.por[k]) p[k] = x.por[k];
+      }
+      if (Array.isArray(x.por.bullets) && x.por.bullets.length > 0) {
+        p.bullets = (p.bullets || []).concat(x.por.bullets);
+      }
     },
   },
 
@@ -263,10 +356,31 @@ If "no link" / "skip" / "private" arrives in response, accept the cert(s) with u
     },
   },
 
+  // ACHIEVEMENTS — each entry must be SPECIFIC: named competition / rank-or-number / scale.
+  // Vague achievements ("won a hackathon") get pushed back for specifics.
   AWAITING_ACHIEVEMENTS: {
-    instruction: 'Extract notable achievements, ranks, prizes, awards as an array of short factual strings. Each entry should be one specific accomplishment.',
+    instruction: `Extract notable achievements, ranks, prizes, awards. Each is a short factual string in the achievements array.
+
+A "specific" achievement contains AT LEAST TWO of:
+  - Named entity (competition, exam, hackathon, paper venue, scholarship name)
+  - Number / rank / percentile (AIR 77, 98.45 percentile, top 1%, 470+ problems solved)
+  - Scale context (out of 14L candidates, across 50 colleges, 1500 participants)
+
+SUFFICIENCY CHECK:
+- If ALL extracted achievements are specific (each has ≥2 of the three) → clarification_needed = null.
+- If ANY achievement is vague (e.g., "won a hackathon", "got a prize", "topped the class") → ask ONE follow-up listing the vague items and asking for missing specifics.
+
+CLARIFICATION EXAMPLES (adapt to what's vague):
+- "Konsa hackathon? Rank kya thi, kitne teams compete kar rahi thi?"
+- "Konsa exam — JEE / NEET / GATE / CAT? Rank ya percentile kya thi?"
+- "Konsa competition — venue / scale batayiye."
+
+When the follow-up arrives, REPLACE the vague achievement(s) with the specific version — don't keep both.`,
     shape: '{ "achievements": [string], "clarification_needed": string | null }',
-    merge: (rj, x) => { rj.achievements = (rj.achievements || []).concat(x.achievements || []); },
+    merge: (rj, x) => {
+      if (!Array.isArray(x.achievements) || x.achievements.length === 0) return;
+      rj.achievements = (rj.achievements || []).concat(x.achievements);
+    },
   },
 };
 

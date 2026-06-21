@@ -1,5 +1,6 @@
 // Twilio Sandbox webhook. PRD §14.
 // Signature-validated, hashes phone before logging, routes to state machine.
+// Reply may be a plain string or { text, media } object for messages with PDF attachment.
 const express = require('express');
 const { validateTwilioRequest } = require('../security/twilioSignature');
 const { hashPhone, shortHash } = require('../security/hash');
@@ -15,15 +16,23 @@ router.post('/', validateTwilioRequest, async (req, res) => {
 
   let reply;
   try {
-    // phoneFrom is transient — used only to populate resume.phone at rewrite time.
-    // Never logged raw, never stored raw, never persisted.
     reply = await handle({ phoneHash, body, phoneFrom });
   } catch (e) {
     req.log.error({ err: e.message }, 'router handle failed');
     reply = 'Server pe kuch issue hai. 30s baad try kariye.';
   }
 
-  const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeXml(reply)}</Message></Response>`;
+  let text, media;
+  if (reply && typeof reply === 'object') {
+    text = reply.text || '';
+    media = reply.media || null;
+  } else {
+    text = String(reply || '');
+    media = null;
+  }
+
+  const mediaTag = media ? `<Media>${escapeXml(media)}</Media>` : '';
+  const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${mediaTag}${escapeXml(text)}</Message></Response>`;
   res.type('text/xml').send(twiml);
 });
 

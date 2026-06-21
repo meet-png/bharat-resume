@@ -1,16 +1,60 @@
-// Supabase Storage upload + signed URL. PRD §3 (Storage row), §5 Phase 3 step 5.
-// Signed URL TTL: 60s.
+// Supabase Storage upload + signed URL. PRD §3, §5 Phase 3 step 5.
+// Signed URLs use 60s TTL — long enough for Twilio to fetch the media,
+// short enough to make scraping the bucket pointless.
 const { getClient } = require('./postgres');
 const { config } = require('../config');
+const logger = require('../logger');
 
-async function uploadPdf(_path, _buffer) {
-  // TODO Day 4: getClient().storage.from(config.SUPABASE_STORAGE_BUCKET).upload(path, buffer, ...)
-  throw new Error('uploadPdf not implemented (Day 4)');
+const BUCKET = config.SUPABASE_STORAGE_BUCKET || 'resumes';
+const SIGNED_URL_TTL_SEC = 60;
+
+// Upload a PDF buffer to Supabase Storage at the given object path.
+// Returns the upload result (or throws).
+async function uploadPdf(objectPath, buffer, opts = {}) {
+  if (!buffer || buffer.length === 0) throw new Error('uploadPdf: empty buffer');
+  const client = getClient();
+  // ArrayBuffer was the most reliable shape for supabase-js v2 + Node 18+
+  // native fetch in our testing. Blob worked sometimes; Buffer flaked frequently.
+  const ab = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+
+  let lastErr;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const t0 = Date.now();
+    try {
+      const { data, error } = await client.storage.from(BUCKET).upload(objectPath, ab, {
+        contentType: 'application/pdf',
+        upsert: opts.upsert !== false,
+        cacheControl: '60',
+        duplex: 'half',
+      });
+      if (error) { lastErr = error; throw error; }
+      logger.info({ ms: Date.now() - t0, objectPath, bytes: buffer.length, attempt }, 'pdf uploaded');
+      return data;
+    } catch (e) {
+      lastErr = e;
+      logger.warn({ err: e.message, attempt, msSoFar: Date.now() - t0 }, `storage upload attempt ${attempt} failed`);
+      if (attempt < 3) await new Promise((r) => setTimeout(r, 250 * attempt));
+    }
+  }
+  logger.error({ err: lastErr?.message, objectPath, bytes: buffer.length }, 'storage upload failed (all retries)');
+  throw lastErr;
 }
 
-async function createSignedUrl(_path) {
-  // TODO Day 4: getClient().storage.from(bucket).createSignedUrl(path, 60)
-  throw new Error('createSignedUrl not implemented (Day 4)');
+// Create a short-lived signed URL Twilio can fetch.
+async function createSignedUrl(objectPath, ttlSec = SIGNED_URL_TTL_SEC) {
+  const client = getClient();
+  const { data, error } = await client.storage.from(BUCKET).createSignedUrl(objectPath, ttlSec);
+  if (error) {
+    logger.error({ err: error.message, objectPath }, 'signed URL failed');
+    throw error;
+  }
+  return data.signedUrl;
 }
 
-module.exports = { uploadPdf, createSignedUrl, BUCKET: config.SUPABASE_STORAGE_BUCKET };
+// Convenience: upload + sign in one call.
+async function uploadAndSign(objectPath, buffer, ttlSec = SIGNED_URL_TTL_SEC) {
+  await uploadPdf(objectPath, buffer);
+  return createSignedUrl(objectPath, ttlSec);
+}
+
+module.exports = { uploadPdf, createSignedUrl, uploadAndSign, BUCKET, SIGNED_URL_TTL_SEC };

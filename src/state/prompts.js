@@ -79,6 +79,13 @@ const PROMPTS = {
     "What skills do you have? Languages, frameworks, tools — drop them all in one message.",
   ],
 
+  [STATES.AWAITING_COURSEWORK]: [
+    "Koi relevant coursework hai jo highlight karna chahte ho? Jaise DSA, ML, Stats, DBMS, etc. 'skip' if none.",
+    "Any relevant coursework worth highlighting? (DSA, Machine Learning, Statistics, OS, DBMS, etc.) Or 'skip'.",
+    "Coursework jo aapko strong banata ho — DSA, AI, Probability, Networks? List kar dijiye, ya 'skip'.",
+    "Top coursework — kuch jo role ke liye relevant ho. Comma-separated batayiye ya 'skip' if none.",
+  ],
+
   // Experience prompt explicitly invites action+impact+tools — primes the LLM
   // sufficiency check that runs in extract.js.
   [STATES.AWAITING_EXPERIENCE]: [

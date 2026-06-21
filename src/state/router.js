@@ -3,6 +3,7 @@ const { STATES, NEXT_STATE, OPTIONAL_STATES, PHASE_2_STATES } = require('./state
 const { pickPrompt, pickMessage } = require('./prompts');
 const { extractSection, SECTION_CONFIG } = require('../llm/extract');
 const { runGeneration, buildPreview } = require('./generator');
+const { deliverPdf } = require('./delivery');
 const { getSession, setSession, checkRateLimit, RATELIMIT_MAX } = require('../store/redis');
 const logger = require('../logger');
 
@@ -45,14 +46,20 @@ function newSession() {
   };
 }
 
-// Returns reply text for the GENERATING transition. Runs the pipeline inline.
-// Caller is responsible for persisting the session afterwards.
-async function tryGenerate(session, phoneFrom) {
+// Returns reply for the GENERATING transition. Runs rewrite + PDF delivery
+// inline. Caller is responsible for persisting the session afterwards.
+// Reply is { text, media } when PDF was delivered, else string.
+async function tryGenerate(session, phoneFrom, phoneHash) {
   if (session.state !== STATES.GENERATING) return null;
   try {
     await runGeneration(session, phoneFrom);
+    const delivery = await deliverPdf(session, phoneHash, { clean: false });
     session.state = STATES.DELIVERED;
-    return buildPreview(session);
+    const text = buildPreview(session);
+    if (delivery && delivery.signedUrl) {
+      return { text: text + '\n\n📎 Watermarked PDF attached. Day 5: ₹49 unlock for clean ATS-readable version.', media: delivery.signedUrl };
+    }
+    return text + '\n\n(PDF delivery failed — preview only. Check server logs.)';
   } catch (e) {
     logger.error({ err: e.message, stack: e.stack }, 'generation pipeline failed');
     return pickMessage('generationFailed');
@@ -110,7 +117,7 @@ async function handle({ phoneHash, body, phoneFrom }) {
   // land here in a follow-up message, run again (e.g., student pinged before
   // initial generation finished, very rare). ---
   if (current === STATES.GENERATING) {
-    const reply = await tryGenerate(session, phoneFrom);
+    const reply = await tryGenerate(session, phoneFrom, phoneHash);
     await setSession(phoneHash, session);
     return reply || pickMessage('deliveredHelp');
   }
@@ -143,6 +150,44 @@ async function handle({ phoneHash, body, phoneFrom }) {
     await setSession(phoneHash, session);
     const ack = kind === 'role' ? pickMessage('jdRoleAck', { role: trimmed }) + '\n\n' : '';
     return ack + pickPrompt(session.state);
+  }
+
+  // --- AWAITING_POR: pending_por accumulator (similar to projects). ---
+  // Multi-bullet, multi-angle sufficiency check; commits pending to por[] when sufficient.
+  if (current === STATES.AWAITING_POR) {
+    if (SKIP_RE.test(trimmed)) {
+      const pending = session.resume_json.pending_por;
+      if (pending && (pending.role || pending.organization) && (pending.bullets || []).length > 0) {
+        session.resume_json.por = (session.resume_json.por || []).concat([pending]);
+      } else if (!session.resume_json.por) {
+        session.resume_json.por = [];
+      }
+      session.resume_json.pending_por = null;
+      session.state = NEXT_STATE[current];
+      await setSession(phoneHash, session);
+      return (await tryGenerate(session, phoneFrom, phoneHash)) || pickPrompt(session.state);
+    }
+    try {
+      const { data, usage } = await extractSection({ state: current, body: trimmed, resumeJson: session.resume_json, session });
+      logger.info({ phoneHash: phoneShort, state: current, usage }, 'extracted');
+      SECTION_CONFIG[current].merge(session.resume_json, data);
+      if (data.clarification_needed) {
+        await setSession(phoneHash, session);
+        return data.clarification_needed;
+      }
+      // Sufficient — commit pending_por to por[] and advance.
+      const pending = session.resume_json.pending_por;
+      if (pending && (pending.role || pending.organization)) {
+        session.resume_json.por = (session.resume_json.por || []).concat([pending]);
+      }
+      session.resume_json.pending_por = null;
+      session.state = NEXT_STATE[current];
+      await setSession(phoneHash, session);
+      return (await tryGenerate(session, phoneFrom, phoneHash)) || pickPrompt(session.state);
+    } catch (e) {
+      logger.error({ err: e.message, state: current }, 'extract failed');
+      return pickMessage('extractFail');
+    }
   }
 
   // --- AWAITING_PROJECTS: multi-entry with pending_project accumulator. ---
@@ -186,7 +231,7 @@ async function handle({ phoneHash, body, phoneFrom }) {
     const optional = OPTIONAL_STATES.has(current);
     if (SKIP_RE.test(trimmed) && optional) {
       session.state = NEXT_STATE[current];
-      const genReply = await tryGenerate(session, phoneFrom);
+      const genReply = await tryGenerate(session, phoneFrom, phoneHash);
       await setSession(phoneHash, session);
       return genReply || pickPrompt(session.state);
     }
@@ -199,7 +244,7 @@ async function handle({ phoneHash, body, phoneFrom }) {
         return data.clarification_needed;
       }
       session.state = NEXT_STATE[current];
-      const genReply = await tryGenerate(session, phoneFrom);
+      const genReply = await tryGenerate(session, phoneFrom, phoneHash);
       await setSession(phoneHash, session);
       return genReply || pickPrompt(session.state);
     } catch (e) {

@@ -1,44 +1,258 @@
-{{!-- Resume template. PRD §9. Single column, A4, ATS-safe.
-     Receives resume_json_rewritten as context.
-     TODO Day 4: implement full layout per §9.2 / §9.3 section order. --}}
 <!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <title>{{name}} — Resume</title>
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Source+Serif+4:wght@400;600&display=swap');
+    /* ─────────────────────────────────────────────────────────────
+       BHARAT RESUME template. Locked to docs/template-reference.md
+       (extracted from Meet's actual resume).
+       ───────────────────────────────────────────────────────────── */
 
     :root {
-      --color-text: #1a1a1a;
-      --color-muted: #555555;
-      --color-rule: #d0d0d0;
-      --color-link: #1a4d8c;
-      --font-display: 'Source Serif 4', Georgia, serif;
-      --font-body: 'Inter', -apple-system, sans-serif;
-      --size-name: 22pt;
-      --size-section: 11pt;
-      --size-body: 10pt;
-      --size-meta: 9pt;
-      --leading-body: 1.35;
-      --space-section: 14pt;
-      --space-item: 6pt;
+      --c-name:      #1A3A5C;
+      --c-link:      #1A3A5C;
+      --c-text:      #111111;
+      --c-secondary: #555555;
+      --c-meta:      #888888;
+      --c-rule:      #d0d0d0;
+      --sz-name:     18pt;
+      --sz-section:  9pt;
+      --sz-body:     9pt;
+      --sz-meta:     8pt;
     }
 
-    @page { size: A4; margin: 16mm 18mm; }
-    body { font-family: var(--font-body); color: var(--color-text); font-size: var(--size-body); line-height: var(--leading-body); margin: 0; }
-    .name { font-family: var(--font-display); font-size: var(--size-name); font-weight: 600; }
-    .contact { font-size: var(--size-meta); color: var(--color-muted); }
-    h2 { font-size: var(--size-section); text-transform: uppercase; letter-spacing: 0.08em; border-bottom: 0.5pt solid var(--color-rule); padding-bottom: 2pt; margin-top: var(--space-section); margin-bottom: var(--space-item); }
-    a { color: var(--color-link); text-decoration: none; }
-    ul { padding-left: 14pt; margin: 0; }
+    @page { size: A4; margin: 14mm 16mm; }
+
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: Georgia, 'Times New Roman', serif;
+      color: var(--c-text);
+      font-size: var(--sz-body);
+      line-height: 1.32;
+    }
+
+    /* Header (name + contact row) */
+    header { text-align: center; margin-bottom: 8pt; }
+    .name {
+      font-size: var(--sz-name);
+      font-weight: bold;
+      color: var(--c-name);
+      letter-spacing: 0.5px;
+    }
+    .contact {
+      font-size: var(--sz-meta);
+      color: var(--c-secondary);
+      margin-top: 2pt;
+    }
+    .contact a { color: var(--c-link); text-decoration: underline; }
+    .contact .sep { color: var(--c-meta); margin: 0 6px; }
+
+    /* Section header */
+    section { margin-top: 9pt; }
+    h2 {
+      font-size: var(--sz-section);
+      font-weight: bold;
+      color: var(--c-text);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin: 0 0 4pt 0;
+      padding-bottom: 1pt;
+      border-bottom: 0.4pt solid var(--c-rule);
+    }
+
+    /* Row with right-aligned date */
+    .row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 12pt;
+    }
+    .row .right {
+      font-size: var(--sz-meta);
+      color: var(--c-meta);
+      white-space: nowrap;
+    }
+
+    /* Education + Experience + Project entries */
+    .entry { margin-bottom: 6pt; }
+    .entry .secondary { color: var(--c-secondary); font-size: var(--sz-body); }
+    .entry .coursework {
+      font-size: var(--sz-meta);
+      color: var(--c-meta);
+      margin-top: 1pt;
+    }
+    .entry .coursework .label { font-weight: bold; }
+
+    /* Skills */
+    .skill-line { margin-bottom: 2pt; }
+    .skill-line .label { font-weight: bold; margin-right: 6px; }
+
+    /* Tech-stack subtitle — italic gray, inline under role/project title */
+    .tech-stack {
+      font-size: var(--sz-meta);
+      color: var(--c-meta);
+      font-style: italic;
+      margin: 1pt 0 2pt 0;
+    }
+
+    /* Bullets */
+    ul { margin: 2pt 0 0 0; padding-left: 14pt; }
     li { margin-bottom: 2pt; }
+    strong { font-weight: bold; }
+
+    /* Project / experience header line */
+    .role { font-weight: bold; color: var(--c-text); }
+    .org  { color: var(--c-secondary); }
+    .org-sep { color: var(--c-secondary); margin: 0 6px; }
+
+    /* Certifications */
+    .cert-line { margin-bottom: 2pt; }
+    .cert-line a { color: var(--c-link); text-decoration: underline; }
+    .cert-line .issuer { color: var(--c-secondary); margin-left: 6px; }
+    .cert-line .right { font-size: var(--sz-meta); color: var(--c-meta); }
+
+    /* Achievements bullets */
+    .achievements-list { padding-left: 14pt; margin: 0; }
+
+    /* PoR — same shape as experience */
+
+    /* Prevent orphaned headers / bullets across pages */
+    h2 { break-after: avoid; }
+    .entry { break-inside: avoid; }
   </style>
 </head>
 <body>
-  <div class="name">{{name}}</div>
-  <div class="contact">{{email}}{{#if phone}} | {{phone}}{{/if}}{{#if linkedin}} | <a href="{{linkedin}}">LinkedIn</a>{{/if}}{{#if github}} | <a href="{{github}}">GitHub</a>{{/if}}</div>
 
-  {{!-- TODO Day 4: summary, education, skills, experience, projects, por, certifications, achievements — per §9.3 order, collapsing empty sections. --}}
+  <header>
+    <div class="name">{{name}}</div>
+    <div class="contact">{{{contact_html}}}</div>
+  </header>
+
+  {{#if summary}}
+  <section>
+    <h2>SUMMARY</h2>
+    <p style="margin: 0;">{{{summary}}}</p>
+  </section>
+  {{/if}}
+
+  {{#if has_education}}
+  <section>
+    <h2>EDUCATION</h2>
+    {{#each education}}
+    <div class="entry">
+      <div class="row">
+        <span><span class="role">{{college}}</span>{{#if location}}, {{location}}{{/if}}</span>
+        <span class="right">{{dates}}</span>
+      </div>
+      <div class="secondary">{{degree}}{{#if branch}} — {{branch}}{{/if}}{{#if cgpa}}  ·  CGPA {{cgpa}}{{/if}}</div>
+      {{#if coursework}}
+      <div class="coursework"><span class="label">Relevant coursework:</span> {{coursework}}</div>
+      {{/if}}
+    </div>
+    {{/each}}
+  </section>
+  {{/if}}
+
+  {{#if has_skills}}
+  <section>
+    <h2>Technical Skills</h2>
+    {{#each skill_categories}}
+    <div class="skill-line"><span class="label">{{label}}:</span>{{items}}</div>
+    {{/each}}
+  </section>
+  {{/if}}
+
+  {{#if has_experience}}
+  <section>
+    <h2>Experience</h2>
+    {{#each experience}}
+    <div class="entry">
+      <div class="row">
+        <span><span class="role">{{role}}</span><span class="org-sep">·</span><span class="org">{{company}}</span></span>
+        <span class="right">{{dates}}{{#if location}}  |  {{location}}{{/if}}</span>
+      </div>
+      {{#if tech_stack_str}}
+      <div class="tech-stack">{{tech_stack_str}}</div>
+      {{/if}}
+      {{#if bullets.length}}
+      <ul>
+        {{#each bullets}}<li>{{{this}}}</li>{{/each}}
+      </ul>
+      {{/if}}
+    </div>
+    {{/each}}
+  </section>
+  {{/if}}
+
+  {{#if has_projects}}
+  <section>
+    <h2>Projects</h2>
+    {{#each projects}}
+    <div class="entry">
+      <div class="row">
+        <span>
+          {{#if github_url}}<a href="{{github_url}}" style="color: var(--c-link); text-decoration: underline; font-size: var(--sz-meta);">[GitHub]</a>  {{/if}}<span class="role">{{name}}</span>
+        </span>
+        <span class="right">{{dates}}</span>
+      </div>
+      {{#if tech_stack_str}}
+      <div class="tech-stack">{{tech_stack_str}}</div>
+      {{/if}}
+      {{#if bullets.length}}
+      <ul>
+        {{#each bullets}}<li>{{{this}}}</li>{{/each}}
+      </ul>
+      {{/if}}
+    </div>
+    {{/each}}
+  </section>
+  {{/if}}
+
+  {{#if has_por}}
+  <section>
+    <h2>Positions of Responsibility</h2>
+    {{#each por}}
+    <div class="entry">
+      <div class="row">
+        <span><span class="role">{{role}}</span><span class="org-sep">·</span><span class="org">{{organization}}</span></span>
+        <span class="right">{{dates}}</span>
+      </div>
+      {{#if bullets.length}}
+      <ul>
+        {{#each bullets}}<li>{{{this}}}</li>{{/each}}
+      </ul>
+      {{/if}}
+    </div>
+    {{/each}}
+  </section>
+  {{/if}}
+
+  {{#if has_certs}}
+  <section>
+    <h2>Certifications</h2>
+    {{#each certifications}}
+    <div class="cert-line">
+      <div class="row">
+        <span>
+          {{#if url}}<a href="{{url}}">{{name}}</a>{{else}}<span class="role">{{name}}</span>{{/if}}
+          {{#if issuer}}<span class="issuer">—  {{issuer}}</span>{{/if}}
+        </span>
+        <span class="right">{{date}}</span>
+      </div>
+    </div>
+    {{/each}}
+  </section>
+  {{/if}}
+
+  {{#if has_achievements}}
+  <section>
+    <h2>Achievements</h2>
+    <ul class="achievements-list">
+      {{#each achievements}}<li>{{{this}}}</li>{{/each}}
+    </ul>
+  </section>
+  {{/if}}
+
 </body>
 </html>
