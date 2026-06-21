@@ -3,6 +3,7 @@
 const { scrapeNaukri } = require('../jd/scrape');
 const { extractKeywords } = require('../llm/keywords');
 const { rewriteResume } = require('../llm/rewrite');
+const { scoreResume, suggestionsFor } = require('../resume/ats_score');
 const logger = require('../logger');
 
 function withTimeout(promise, ms, fallback, label) {
@@ -52,7 +53,11 @@ async function runGeneration(session, phoneFrom) {
         jdGeneric: session.jd_generic,
         phoneFrom,
       }),
-      11000,
+      // 13s ceiling (bumped from 11s after observable cold-call flake).
+      // We're parallel with keywords (which usually finishes in 2-4s), so the
+      // critical path is rewrite alone. Render+watermark+upload add ~3-4s,
+      // keeping us inside Twilio's 15s webhook budget on the happy path.
+      13000,
       { data: null, usage: null },
       'rewrite'
     ),
@@ -64,8 +69,18 @@ async function runGeneration(session, phoneFrom) {
   session.resume_json_rewritten = rewritten.data;
   session.rewrite_usage = rewritten.usage;
 
+  // ATS score — deterministic, local, ~5-10ms. PRD §11.
+  if (session.resume_json_rewritten) {
+    const tAts = Date.now();
+    const scored = scoreResume(session.resume_json_rewritten, session.jd_keywords);
+    session.ats_score = scored.total;
+    session.ats_breakdown = scored;
+    session.ats_suggestions = suggestionsFor(scored);
+    timings.ats_ms = Date.now() - tAts;
+  }
+
   timings.total_ms = Date.now() - t0;
-  logger.info({ timings, kwCount: session.jd_keywords.length }, 'generation complete');
+  logger.info({ timings, kwCount: session.jd_keywords.length, atsScore: session.ats_score }, 'generation complete');
   return session;
 }
 
@@ -184,8 +199,18 @@ function buildPreview(session) {
     lines.push(`*JD keywords (for reference):* ${session.jd_keywords.slice(0, 6).join(', ')}\n_(No direct overlap with your skills — rewriter still tailored framing to the role.)_`);
   }
 
+  // ATS score block — PRD §11.2.
+  if (typeof session.ats_score === 'number') {
+    lines.push('');
+    lines.push(`*ATS Score:* ${session.ats_score}/100`);
+    if (session.ats_score < 60 && Array.isArray(session.ats_suggestions) && session.ats_suggestions.length > 0) {
+      lines.push(`_To improve:_`);
+      for (const s of session.ats_suggestions) lines.push(`  • ${s}`);
+    }
+  }
+
   lines.push('');
-  lines.push(`Type "show me" for full JSON.\nPDF + ATS score: Day 4-5.`);
+  lines.push(`Type "show me" for full JSON.`);
 
   let out = lines.join('\n');
   if (out.length > 1500) out = out.slice(0, 1480) + '\n…(truncated)';
