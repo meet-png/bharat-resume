@@ -1,4 +1,4 @@
-// State constants. PRD §6.
+// State constants + transitions. PRD §6.
 const STATES = Object.freeze({
   NEW: 'NEW',
   AWAITING_CONFIRM_START: 'AWAITING_CONFIRM_START',
@@ -22,7 +22,7 @@ const STATES = Object.freeze({
   PAID_COMPLETE: 'PAID_COMPLETE',
 });
 
-// Linear Phase 2 transitions; Phases 4-7 are free-form (see PRD §6).
+// Linear Phase 2 transitions. Phases 4-7 are free-form (PRD §6).
 const NEXT_STATE = Object.freeze({
   [STATES.NEW]: STATES.AWAITING_CONFIRM_START,
   [STATES.AWAITING_CONFIRM_START]: STATES.AWAITING_NAME,
@@ -41,4 +41,32 @@ const NEXT_STATE = Object.freeze({
   [STATES.AWAITING_ACHIEVEMENTS]: STATES.GENERATING,
 });
 
-module.exports = { STATES, NEXT_STATE };
+// Sections where "skip" is valid (PRD §5 Phase 2 table — "Optional? Yes" rows).
+const OPTIONAL_STATES = new Set([
+  STATES.AWAITING_LINKEDIN,
+  STATES.AWAITING_GITHUB,
+  STATES.AWAITING_EXPERIENCE,
+  STATES.AWAITING_PROJECTS,
+  STATES.AWAITING_POR,
+  STATES.AWAITING_CERTS,
+  STATES.AWAITING_ACHIEVEMENTS,
+]);
+
+// Phase 2 collection states (all states asking the student a question that the LLM extracts from).
+const PHASE_2_STATES = new Set([
+  STATES.AWAITING_NAME,
+  STATES.AWAITING_EMAIL,
+  STATES.AWAITING_LINKEDIN,
+  STATES.AWAITING_GITHUB,
+  STATES.AWAITING_EDUCATION,
+  STATES.AWAITING_CGPA,
+  STATES.AWAITING_JD,
+  STATES.AWAITING_SKILLS,
+  STATES.AWAITING_EXPERIENCE,
+  STATES.AWAITING_PROJECTS,
+  STATES.AWAITING_POR,
+  STATES.AWAITING_CERTS,
+  STATES.AWAITING_ACHIEVEMENTS,
+]);
+
+module.exports = { STATES, NEXT_STATE, OPTIONAL_STATES, PHASE_2_STATES };

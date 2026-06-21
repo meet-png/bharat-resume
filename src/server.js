@@ -35,5 +35,12 @@ app.use((err, req, res, _next) => {
 });
 
 app.listen(config.PORT, () => {
-  logger.info({ port: config.PORT, env: config.NODE_ENV }, 'bharat-resume up');
+  // Include router.js mtime in the boot banner so server.log makes it obvious
+  // which version of the state machine is live (catches "old code still running" bugs).
+  const fs = require('fs');
+  const routerStat = fs.statSync(require.resolve('./state/router'));
+  logger.info(
+    { port: config.PORT, env: config.NODE_ENV, routerMtime: routerStat.mtime.toISOString() },
+    'bharat-resume up'
+  );
 });

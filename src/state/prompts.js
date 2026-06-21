@@ -1,14 +1,206 @@
-// Saathi's outbound messages, keyed by state. PRD §5, §6.
-// TODO Day 2: populate per PRD §5 (full Phase 1-7 wording). Use आप, not तू/तुम.
-// Each prompt ≤2 lines on mobile.
+// Saathi's outbound messages, keyed by state. PRD §5.
+// Voice rules: Latin script only. Warm elder-cousin tone. ≤2 mobile lines.
+// 3-5 variants per state — pickPrompt() chooses randomly so two students get
+// different conversational flavors.
 const { STATES } = require('./states');
 
 const PROMPTS = {
-  [STATES.NEW]:
-    'नमस्ते! मैं Saathi, BHARAT RESUME का AI bot. आपका professional resume सिर्फ 10 मिनट में बना दूंगा — हिंदी या English में बात करें, जैसा comfortable हो. Ready हैं?',
-  [STATES.AWAITING_NAME]: 'सबसे पहले, आपका पूरा नाम क्या है?',
-  [STATES.AWAITING_EMAIL]: 'आपकी email ID?',
-  // TODO Day 2: fill in the rest from PRD §5 Phase 2 table.
+  [STATES.NEW]: [
+    "Hey! I'm Saathi from BHARAT RESUME. Aapka professional resume 10 min mein bana denge — chat in Hinglish or English, jo comfortable ho. Ready? Reply 'yes' / 'haan' to start.",
+    "Namaste! Saathi here — BHARAT RESUME ka AI bot. Resume bana denge ~10 min mein. Hinglish or English, both fine. Shall we start? Type 'yes' or 'haan'.",
+    "Hi! Main Saathi hu — I'll build your professional resume in about 10 minutes. Hinglish/English chalega. Shuru karein? Reply 'yes' / 'ready'.",
+    "Hello! Saathi from BHARAT RESUME — 10 min mein professional resume ready. Chat in whatever you prefer: English, Hinglish, mix. Type 'haan' / 'yes' to begin.",
+  ],
+
+  // Warmer fallbacks for when the user sends something other than yes/haan/ready.
+  // Acknowledges the contact + sets expectation + ends with a clear CTA.
+  [STATES.AWAITING_CONFIRM_START]: [
+    "Hi! Saathi here — chaliye aapka resume banate hain. Reply 'yes' or 'haan' to start.",
+    "Hey! Bas 'yes' likh dijiye aur 10 min mein resume ready. Chalein?",
+    "Namaste! Resume banate hain saath mein. Type 'yes' / 'haan' / 'ready' to begin.",
+    "Saathi ready hai ✓ Reply 'yes' / 'haan' to kick off — aapka professional resume 10 min mein tayar.",
+  ],
+
+  [STATES.AWAITING_NAME]: [
+    "Pehle aapka pura naam batayiye?",
+    "Let's start basic — what's your full name?",
+    "Full name kya hai aapka?",
+    "First up: your full name please.",
+  ],
+
+  [STATES.AWAITING_EMAIL]: [
+    "Email ID share kar dijiye?",
+    "What's your email ID?",
+    "Cool. Ab email bhejiye.",
+    "Drop your email here.",
+  ],
+
+  [STATES.AWAITING_LINKEDIN]: [
+    "LinkedIn URL bhejiye? Type 'skip' agar nahi hai.",
+    "Share your LinkedIn profile (or 'skip').",
+    "LinkedIn ka link? 'skip' likh dijiye agar nahi hai.",
+    "LinkedIn profile link? 'skip' if you don't have one.",
+  ],
+
+  [STATES.AWAITING_GITHUB]: [
+    "GitHub profile? Link bhej dijiye, ya 'skip'.",
+    "GitHub link share kariye, warna 'skip'.",
+    "Got a GitHub? Drop the link, otherwise type 'skip'.",
+    "GitHub URL? 'skip' if you don't have one.",
+  ],
+
+  [STATES.AWAITING_EDUCATION]: [
+    "Apni padhai ki details bhejiye — degree, college, branch, expected graduation year, sab ek message mein.",
+    "Tell me about your degree — course + college + branch + expected year, all in one message.",
+    "Education details: degree, college ka naam, branch, expected year of passing. Ek saath bhej dijiye.",
+    "Share your education: which degree, which college, branch, year of passing — single message please.",
+  ],
+
+  [STATES.AWAITING_CGPA]: [
+    "CGPA ya percentage kya hai?",
+    "What's your CGPA (or percentage)?",
+    "Score batayiye — CGPA ya % whichever.",
+    "Aapka academic score? CGPA / percentage, koi bhi.",
+  ],
+
+  // JD step now offers THREE paths: full JD, role-name only, or generic.
+  // PRD §5 step 7 amended on 2026-06-21 — see Decisions log.
+  [STATES.AWAITING_JD]: [
+    "Ab us job ka Naukri link bhejiye, ya JD ka text paste kar dijiye. Bas role ka naam (jaise 'Software Engineer') bhi chalega. 'No specific role' bolo if generic resume chahiye.",
+    "Which job are you targeting? Share the Naukri URL, paste JD text, or just type the target role (e.g., 'Data Analyst'). Or 'no specific role' for generic.",
+    "Job ka link / JD / role name — kuch bhi bhej dijiye. Naukri URL, raw JD text, ya simply 'Backend Developer' jaisa role title. 'No specific role' agar koi specific nahi hai.",
+    "Target job — drop the Naukri link, paste JD text, OR just the role title (e.g., 'Frontend Engineer'). Say 'no specific role' for a role-agnostic resume.",
+  ],
+
+  [STATES.AWAITING_SKILLS]: [
+    "Kaun kaun si skills aati hain? Programming languages, frameworks, tools — casually likh dijiye.",
+    "List your skills — programming languages, frameworks, tools, libraries, anything relevant.",
+    "Skills batayiye: languages, libraries, tools, databases — jo bhi aata hai sab.",
+    "What skills do you have? Languages, frameworks, tools — drop them all in one message.",
+  ],
+
+  // Experience prompt explicitly invites action+impact+tools — primes the LLM
+  // sufficiency check that runs in extract.js.
+  [STATES.AWAITING_EXPERIENCE]: [
+    "Koi internship ya job experience? Company, role, dates, kya kiya, aur impact kya tha (% improve / users / time saved) — ek saath. 'skip' if none.",
+    "Any internship/work experience? Drop company + role + dates + what you DID + the impact (numbers, results, deliverable). Or 'skip'.",
+    "Work experience? Company, role, duration, ek concrete action, aur outcome — sab batao. Type 'skip' if not.",
+    "Internships/jobs share kariye — kahaan, kya role, kya banaya/improve kiya, kya result mila. 'skip' agar nahi hai.",
+  ],
+
+  // Projects prompt asks for description + LINK so we can auto-enrich from GitHub.
+  [STATES.AWAITING_PROJECTS]: [
+    "Projects share kariye — ek project per message. Name + GitHub link + 2-3 lines kya banaya. Multiple projects ho to ek-ek karke. 'done' jab sab bata den, 'skip' if none.",
+    "Tell me about your projects — one per message. Name, the GitHub link (or live URL), and a short description. Type 'done' when finished, 'skip' if none.",
+    "Koi projects? Har project alag message: name, GitHub link, brief description. 'done' for finish, 'skip' for none. GitHub link ho to bhej dena — main repo se details pick kar lunga.",
+    "Projects batao — one at a time. Include name + GitHub link + what it does. I'll pull tech stack and details from the repo. Type 'done' when complete, 'skip' if nothing.",
+  ],
+
+  // PoR step: jargon dropped, plain language used per Meet's feedback.
+  [STATES.AWAITING_POR]: [
+    "Koi leadership ya responsibility role hai? Class representative, club head, event organizer, NSS/NCC — kuch aisa. 'skip' if none.",
+    "Any leadership role at college? — class rep, society head, event lead, NSS/NCC, etc. 'skip' for none.",
+    "Leadership ya responsibility hai kuch — class rep, club, society, event organizer, NSS/NCC? Drop it here ya 'skip'.",
+    "Held a leadership/responsibility role at college? Like class rep, club lead, society head, event organizer, NSS/NCC. 'skip' if not.",
+  ],
+
+  // Certs: just name + link. No more issuer/date follow-ups (Day 4 template
+  // renders as a clickable hyperlink — name as text, link as href).
+  [STATES.AWAITING_CERTS]: [
+    "Certifications ya courses? Naam aur verification link bhejiye (NPTEL/Coursera/AWS/etc.). Multiple ho to ek-ek karke. 'skip' if none.",
+    "Any certifications? Share name + verification URL (Coursera / NPTEL / AWS / Udemy / etc.) — one per message if multiple. 'skip' for none.",
+    "Certifications/courses kiye hain? Drop name + link (verification URL). 'skip' if nothing comes to mind.",
+    "Share certifications — just the name and the link. I'll handle issuer + date from the URL. 'skip' if none.",
+  ],
+
+  [STATES.AWAITING_ACHIEVEMENTS]: [
+    "Last one — koi achievements, ranks, prizes? List kar dijiye. 'skip' / 'no' if nothing comes to mind.",
+    "Final section: any achievements, awards, or prizes? Or 'skip' / 'no'.",
+    "Awards/ranks/prizes? Sab batayiye, ek saath. 'skip' or 'no' if none.",
+    "Last question: notable achievements, competitions, awards? Or 'skip' / 'no' to wrap up.",
+  ],
 };
 
-module.exports = { PROMPTS };
+const MESSAGES = {
+  rateLimit: [
+    "Whoa, slow down — try again in {sec}s.",
+    "Bahut tez messages aa rahe hain. {sec}s wait kariye.",
+    "Easy easy! {sec}s baad try kariye phir.",
+  ],
+
+  reset: [
+    "Session cleared ✓",
+    "Reset done.",
+    "Fresh start ready.",
+  ],
+
+  projectSaved: [
+    "Project #{n} saved ✓ — agla project bhejo, ya 'done' likho.",
+    "Saved! Project {n} locked in. Add another, or type 'done'.",
+    "{n} project(s) stored ✓ — keep going, or 'done' when finished.",
+    "Got it — project #{n} ✓. Add more, or 'done' to wrap projects.",
+  ],
+
+  extractFail: [
+    "Hmm, samajh nahi aaya. Ek baar phir bhej dijiye?",
+    "Could you rephrase that?",
+    "Confused ho gaya — try again?",
+    "Didn't quite catch that. One more time?",
+  ],
+
+  serverError: [
+    "Server pe kuch issue hai. 30s baad try kariye.",
+    "Hmm, something broke. Give it 30s and retry.",
+    "Backend hiccup — try again in a moment.",
+  ],
+
+  // When AWAITING_JD gets a "no specific role" / generic request.
+  jdGenericAck: [
+    "Cool — generic resume banayenge. Skills + experience emphasize karenge.",
+    "Got it, no specific JD. Building a role-agnostic resume.",
+    "Theek hai — generic resume mode on. Aapki overall strength highlight karenge.",
+  ],
+
+  // When AWAITING_JD gets just a role name (e.g., "Software Engineer").
+  jdRoleAck: [
+    "Cool — '{role}' ke liye tailor karenge ✓",
+    "Got it. Targeting '{role}' — bullets and summary will lean into that.",
+    "Locked: '{role}' role focus mein rakhenge.",
+    "Theek hai — '{role}' ko target karke resume banayenge.",
+  ],
+
+  generatingDone: [
+    "Bas! All details collected ✓ Resume generation Day 3 mein implement hoga. Type 'show me' to peek at collected data.",
+    "Done collecting ✓ Day 3 will turn this into your actual PDF. Try 'show me' to see what we got.",
+    "Sab data ready ✓ PDF generation Day 3 ka kaam hai. 'show me' likh ke abhi snapshot dekh sakte hain.",
+  ],
+
+  beyondPhase2: [
+    "Day 2 yahin tak hai. Rewrite + PDF + ATS scoring Day 3+ mein. Use 'show me' to view data, 'reset' to restart.",
+    "We're at the edge of Day 2 build. Try 'show me' to view collected data, or 'reset' to start over.",
+    "Day 3 features coming soon. For now: 'show me' for current state, 'reset' for a fresh attempt.",
+  ],
+};
+
+function pick(arr) {
+  if (!Array.isArray(arr)) return arr;
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+function pickPrompt(state) {
+  const p = PROMPTS[state];
+  if (!p) return null;
+  return pick(p);
+}
+
+function pickMessage(key, vars = {}) {
+  const m = MESSAGES[key];
+  if (!m) return key;
+  let s = pick(m);
+  for (const [k, v] of Object.entries(vars)) {
+    s = s.replace(new RegExp(`\\{${k}\\}`, 'g'), v);
+  }
+  return s;
+}
+
+module.exports = { PROMPTS, MESSAGES, pickPrompt, pickMessage };

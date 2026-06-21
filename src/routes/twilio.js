@@ -1,9 +1,9 @@
-// Twilio Sandbox webhook. PRD §14, §18 Day 1 milestone.
-// Day 1: echo back inbound Body. Day 2+: delegate to state machine.
-// Signature validation runs first — any unsigned/invalid request gets 403.
+// Twilio Sandbox webhook. PRD §14.
+// Signature-validated, hashes phone before logging, routes to state machine.
 const express = require('express');
 const { validateTwilioRequest } = require('../security/twilioSignature');
 const { hashPhone, shortHash } = require('../security/hash');
+const { handle } = require('../state/router');
 
 const router = express.Router();
 
@@ -12,10 +12,14 @@ router.post('/', validateTwilioRequest, async (req, res) => {
   const phoneHash = hashPhone(req.body && req.body.From);
   req.log.info({ from: shortHash(phoneHash), bodyLen: body.length }, 'inbound whatsapp');
 
-  // TODO Day 2: route to state machine.
-  // const reply = await require('../state/router').handle({ phoneHash, body });
+  let reply;
+  try {
+    reply = await handle({ phoneHash, body });
+  } catch (e) {
+    req.log.error({ err: e.message }, 'router handle failed');
+    reply = 'Server pe kuch issue hai. 30s baad try kariye.';
+  }
 
-  const reply = body || '(empty message)';
   const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeXml(reply)}</Message></Response>`;
   res.type('text/xml').send(twiml);
 });

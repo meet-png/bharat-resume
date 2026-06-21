@@ -13,9 +13,9 @@
 
 | Day | Date | Milestone | Status | Notes |
 |---|---|---|---|---|
-| 1 | Thu 19 Jun | Scaffolding + WhatsApp echo | ✅ Done | Verified live: WhatsApp → Twilio Sandbox → ngrok (static domain `babble-fifteen-rust.ngrok-free.dev`) → Express → TwiML reply. Slightly into Day 2 calendar-wise; not a blocker. |
-| 2 | Fri 20 Jun | State machine + info collection | 🟡 In progress | OpenAI key signup next. |
-| 3 | Sat 21 Jun | LLM rewrite + JD scrape | ⬜ Not started | |
+| 1 | Thu 19 Jun | Scaffolding + WhatsApp echo | ✅ Done | Verified live: WhatsApp → Twilio Sandbox → ngrok (static domain `babble-fifteen-rust.ngrok-free.dev`) → Express → TwiML reply. |
+| 2 | Fri 20 – Sun 21 Jun | State machine + info collection | ✅ Done | Full Phase 2 flow live: 13 sections, sufficiency-aware extraction, role-aware clarifications, GitHub repo enrichment for projects, 3-path JD (URL / role-name / generic / full JD text), Hinglish+English only (Latin script), 4 variants per state. 7-block offline smoke (`.runtime/smoke-router.js`) all pass. Verified end-to-end on WhatsApp. |
+| 3 | Sat 21 – Mon 22 Jun | LLM rewrite + JD scrape | ⬜ Not started | Calendar slipped one day vs PRD §18; the role-aware infra built in Day 2 will accelerate Day 3. |
 | 4 | Sun 22 Jun | PDF rendering + watermark | ⬜ Not started | |
 | 5 | Mon 23 Jun | ATS score + payment + edit loop | ⬜ Not started | |
 | 6 | Tue 24 Jun | Telemetry, dashboard, deploy, dry run | ⬜ Not started | |
@@ -28,34 +28,31 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 ## 2. Current implementation state
 
 **Working (verified end-to-end against live services):**
-- Express server boots on `:3000` with pino logging, `helmet`, body-size cap, and `trust proxy: 1`.
-- `GET /health` → `{ ok: true, ts: ... }`.
-- `POST /webhook/twilio` → **signature-validated**; Day 1 echo flow verified live via WhatsApp → Twilio Sandbox → ngrok (static `babble-fifteen-rust.ngrok-free.dev`) → Express → TwiML reply.
-- `POST /webhook/razorpay` → **HMAC-SHA256 signature validated**; verifier proven correct (accepts valid, rejects tampered, rejects missing) via `.runtime/smoke-razorpay.js`.
-- Razorpay Payment Link create-and-cancel verified against test-mode API.
-- Supabase: 4 tables + 2 indexes + RLS enabled (`db/schema.sql` applied); `resumes` storage bucket created (private). Service-role connection verified.
-- Upstash Redis (Mumbai): connection, `SET`/`GET`/`EXPIRE`/`DEL` verified; TTL semantics confirmed (required for the 24h session pattern). Redis 8.2.0.
-- OpenAI: `gpt-4o-mini` smoke call returned in <1s for $0.000004; on track for PRD's ₹0.10-0.15/resume.
-- `GET /admin/metrics` → **Basic Auth gated**; handler stub (Day 6).
-- `src/state/states.js` — full state constants + linear Phase 2 transition table.
-- `src/jd/parse.js` — Naukri URL detector + generic URL guard.
-- `src/security/{hash,twilioSignature,basicAuth}.js` — phone hashing, webhook validation, admin auth.
-- Pino logger redacts secrets and PII fields by default. `src/config.js` tolerates empty `.env` values (zod preprocess).
+- Express server boots on `:3000` with pino logging, `helmet`, body-size cap, `trust proxy: 1`, and a startup banner that logs `routerMtime` so "old code still running" can never be a silent bug.
+- `GET /health`, `POST /webhook/twilio` (signature-validated), `POST /webhook/razorpay` (HMAC verified), `GET /admin/metrics` (basic auth gated stub).
+- Razorpay test-mode Payment Link round-trip verified; HMAC signature verifier proven correct against valid/tampered/missing.
+- Supabase Postgres: 4 tables + 2 indexes + RLS, `db/schema.sql` is source of truth. `resumes` storage bucket private.
+- Upstash Redis (Mumbai): session store, JD cache key prefix, and rate limit (`30/60s per phone`) all wired. Helpers in `src/store/redis.js`.
+- **Day 2 state machine** (`src/state/router.js`): full PRD §6 state graph, NEW/CONFIRM_START unified, `reset` seeds AWAITING_CONFIRM_START and replies with confirmation + welcome in one message. SKIP_RE handles `skip`/`no`/`nahi`/`nope`/`none`/`nothing`. Top-of-handler tracing with branch/state/bodyHead logs.
+- **3-path JD step**: heuristic classifier routes input to `jd_url`, `jd_role` (short single-line, no JD markers), `jd_text` (long/markers/many commas), or `jd_generic` (no specific role). No extra LLM call — purely deterministic + free.
+- **Role-aware extraction** (`src/llm/extract.js` `buildJdContext`): every per-section LLM call gets the JD/role context. Sufficiency check + targeted clarifications in `AWAITING_EXPERIENCE` and `AWAITING_PROJECTS`. Clarifications adapt the metric vocabulary to the target role — Marketing → reach/CTR/leads; Engineering → latency/scale/RPS; Civil → budget/timeline/safety; etc. Smoke `.runtime/smoke-router.js` Block 7 confirms 5/5 unique role-tailored clarifications.
+- **GitHub project enrichment** (`src/enrichment/github.js`): when a student drops a `github.com/owner/repo` URL into the projects step, we fetch repo metadata + languages + README excerpt (best-effort, 4s timeout, GITHUB_TOKEN optional for rate limit), pass to LLM so it doesn't re-ask for tech stack.
+- **Hinglish + English only**: Latin script enforced — `src/state/prompts.js` has 4 variants per state with `pickPrompt`/`pickMessage` random selection. Extract.js system prompt also bans Devanagari in `clarification_needed`. Smoke runs a Devanagari leak detector across every reply (0 leaks).
+- **Cert simplification** (Decisions log 2026-06-21): collect `{name, url}` only. No more issuer/date follow-ups. Day 4 template will render as hyperlink (name = display, url = href).
+- **PoR jargon removed**: "leadership/responsibility role" with examples, no "PoR" acronym anywhere.
+- Pino logger redacts all known secret-bearing keys + auth/signature headers. PII (phone) sha256-hashed before logging.
 
-**Scaffolded but not implemented (stubs throw, with `TODO Day N` markers pointing at PRD sections):**
-- `src/state/router.js` (Day 2) · `src/state/prompts.js` (partial — first 2 prompts; Day 2 to fill rest)
-- `src/llm/{client,extract,rewrite,edit,keywords}.js` (Day 2–5)
+**Scaffolded but not implemented (stubs throw, with `TODO Day N` markers):**
+- `src/llm/{rewrite,edit,keywords}.js` — Day 3 (rewriter takes raw `resume_json` + JD context → impact-oriented English) / Day 5 (edit prompt for free-text edits)
 - `src/jd/scrape.js` (Day 3 — Naukri Puppeteer scraper)
 - `src/resume/{render,pdf,watermark,ats_score}.js` (Day 4–5)
-- `src/payment/razorpay.js` (Day 5)
-- `src/store/{postgres,redis,storage}.js` — clients/getters in place; query helpers TODO
+- Day 5: payment link creation, edit loop wiring, regenerate-on-paid
+- `src/store/{postgres,storage}.js` — query helpers + signed-URL helpers
 - `src/telemetry/events.js` (Day 6 — event taxonomy constant defined)
 - `src/templates/resume.hbs` — head/contact only; sections TODO (Day 4)
 
 **Not yet:**
-- Railway deploy (Day 6 milestone)
-- Day 2 implementation work: state router, LLM extraction/rewrite, prompts.js fill-in (PRD §5 Phase 2 table)
-- Day 3+: JD scraper, PDF render, watermark, ATS scorer, edit loop, telemetry, metrics dashboard
+- Railway deploy (Day 6 milestone). Local + ngrok-fronted dev is current setup.
 
 ---
 
@@ -95,7 +92,47 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 7. Per-phone rate limit in Redis (PRD §13.3): 30 msg/60s.
 8. Day 2 milestone: complete the full Q&A flow against Redis; eyeball the final `resume_json`.
 
-### Session 2 — 2026-06-19 evening → 2026-06-20 early morning (Claude Opus 4.7)
+### Session 3 — 2026-06-20 → 2026-06-21 (Claude Opus 4.7)
+
+**Did (Day 2 implementation, fully verified):**
+- Wrote `src/llm/client.js#complete()` (OpenAI gpt-4o-mini, strict JSON, single-provider retry on parse failure).
+- Wrote `src/llm/extract.js` with declarative `SECTION_CONFIG` for all 13 Phase 2 states — each has its own LLM instruction, JSON shape hint, and merge function.
+- Wrote `src/state/router.js#handle({ phoneHash, body })` — full state machine with rate limit, signature-protected webhook route, top-of-handler trace logging.
+- Filled `src/state/prompts.js` with 3–5 Latin-script variants per state; added `pickPrompt`/`pickMessage` random selectors.
+- Wired `src/routes/twilio.js` to call router; phone numbers sha256-hashed before any log line.
+- Added `src/enrichment/github.js` (PRD-divergent module; logged in README Decisions log 2026-06-21) — fetches GitHub repo metadata + README excerpt when student drops a repo URL in projects step.
+- Built `buildJdContext()` so every per-section extract gets the JD/role-name/JD-text/generic flag injected — clarifications and bucket-classification calibrate to the target role automatically.
+- Built 3-path JD step with deterministic heuristic classifier: URL / role-name / full JD text / generic. Heuristic uses length + newline + JD markers + comma count.
+- Implemented sufficiency check for Experience + Projects: LLM evaluates (a) who/where (b) action (c) impact; if any missing, asks ONE targeted question (not the whole question again). Examples for clarifications are role-derived, not hardcoded.
+- Simplified Cert step to `name + url` only (no issuer/date follow-ups) — Day 4 template will render hyperlink. PRD §13.1 / §7.2 divergence logged in README.
+- Dropped "PoR" acronym from prompts — plain language ("leadership/responsibility role").
+- Fixed three bugs Meet found in field testing:
+  1. **state=NEW fallthrough**: `reset` left state=NEW; main switch had no NEW branch → every subsequent message fell to beyondPhase2. Fixed by handling NEW alongside AWAITING_CONFIRM_START + making reset reply with confirmation + welcome in one message.
+  2. **achievements loop**: SKIP_RE only matched "skip" literal; "no"/"nahi"/"none" looped. Expanded to all common negatives.
+  3. **stale code running**: server boot now logs `routerMtime` so we can verify which version of state machine is live.
+- `.runtime/smoke-router.js` extended to 7 blocks (reset regression, full 15-step flow, JD generic, achievement negatives, experience sufficiency, JD classification, role-aware clarifications). All pass.
+
+**Surprises:**
+- LLM was literally copying tech-flavored example phrases from the instruction (e.g., "intern, developer, designer"). Had to strip the examples and replace with role-derived patterns.
+- ngrok+server processes survived several hours of laptop idle without dropping — better than expected on free tier.
+- `Start-Process -RedirectStandardOutput` truncates the log on every restart — caused initial confusion ("server.log has no Twilio POSTs!" actually meant "old server wrote that log, new server truncated it"). Boot banner with `routerMtime` solves this for future restarts.
+
+**Decisions made (also in README Decisions log):**
+- 3-path JD (URL / role / generic / full JD) instead of just URL-or-text. Heuristic classifier — no extra LLM call.
+- `pending_project` accumulator in projects step — message-by-message refinement until LLM says sufficient OR student types `done`/`skip`.
+- GitHub enrichment is a NEW module not in PRD §16 — `src/enrichment/github.js`. Best-effort, never blocks. `GITHUB_TOKEN` added as optional env var.
+- Cert schema diverges from PRD §13.1 — `{ name, url }` not `{ name, issuer, date }`. Day 4 template will adapt.
+- Skill bucket schema kept stable (`languages/frameworks/tools/databases/other`) but content adapts to target role — for non-tech roles, role-appropriate items fall into `tools`/`other`.
+
+**Next session — Day 3 (LLM rewrite + JD scrape):**
+1. Read PRD §7.2 (rewriter prompt), §7.4 (JD keyword extractor), §8 (JD scraping), §9 (template), §10 (watermark).
+2. Implement `src/llm/rewrite.js` — takes raw `resume_json` + JD context (role / text / keywords / generic) → returns `resume_json_rewritten` with action-verb bullets, impact-oriented summary, role-tailored framing. Use the same `buildJdContext` pattern.
+3. Implement `src/llm/keywords.js` — extract top 15 hard skills/tools from `jd_text` or, for jd_role, infer typical keywords for that role.
+4. Implement `src/jd/scrape.js` — Puppeteer Naukri scraper. Verify the live DOM selector first (PRD §20 open item). Cache by `sha256(url)` in Redis 24h.
+5. Implement `src/store/postgres.js` insert/upsert helpers — start writing users + resumes rows at end of Phase 2.
+6. Day 3 milestone: generation runs, produces `resume_json_rewritten` + a basic action-verb bulletified version. PDF render lands Day 4.
+
+
 
 **Did:**
 - Hit Day 1 milestone live: WhatsApp echo via Twilio Sandbox → ngrok static domain → Express → TwiML reply.
@@ -136,7 +173,11 @@ Carry these forward each session until resolved. Add new ones whenever a build d
 - [x] **Upstash Redis** — Mumbai regional instance, TLS URL with `rediss://`, full round-trip verified. Password rotated once after a UI mishap.
 - [x] **Razorpay test mode** — keys + webhook secret in `.env`. Test Payment Link creation verified; HMAC verifier proven correct.
 - [ ] **Razorpay live KYC** — Meet to submit PAN/Aadhaar/bank in dashboard. 2-4 day review. Run in parallel; not blocking.
-- [ ] **PRD §20 open items** — Naukri DOM selector (Day 3), ATS keyword count weighting (Day 5), edit iteration limit (Day 6), per-prompt tone tuning (Day 2). Resolve as we hit each.
+- [x] **Day 2 voice / variants** — Hinglish + English only (Latin script). 3–5 variants per state. Saathi tone confirmed acceptable.
+- [x] **JD step paths** — 3 paths live (URL / role-name / generic) plus full JD text. Meet confirmed "we are good".
+- [x] **Role-aware extraction** — confirmed across 5+ diverse roles in smoke; clarifications adapt to role-native metrics.
+- [ ] **PRD §20 open items still open** — Naukri DOM selector (Day 3), ATS keyword count weighting (Day 5), edit iteration limit (Day 6).
+- [ ] **GITHUB_TOKEN** — optional env var added to `.env.example`. Not set yet; unauthenticated GitHub API works at 60 req/hr — fine for prototype. Add token if we hit limits.
 
 ---
 

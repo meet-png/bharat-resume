@@ -30,6 +30,10 @@ const schema = z.object({
   RAZORPAY_KEY_SECRET: z.preprocess(emptyAsUndefined, z.string().optional()),
   RAZORPAY_WEBHOOK_SECRET: z.preprocess(emptyAsUndefined, z.string().optional()),
 
+  // Optional: GitHub PAT raises unauthenticated rate-limit (60/hr) to 5000/hr.
+  // Used by src/enrichment/github.js for project repo enrichment.
+  GITHUB_TOKEN: z.preprocess(emptyAsUndefined, z.string().optional()),
+
   ADMIN_USERNAME: z.string().default('meet'),
   ADMIN_PASSWORD: z.preprocess(emptyAsUndefined, z.string().optional()),
 });
