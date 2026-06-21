@@ -143,77 +143,60 @@ function summarizeSkills(skills) {
   return out;
 }
 
-// Compact preview for WhatsApp. ≤1400 chars total.
-// Shows: name, summary, skills, ALL experience entries (top bullet each),
-// ALL project entries (top bullet each, capped at 3), real keywords matched.
+// Lean preview for WhatsApp — deliberately omits all copyable content
+// (summary, bullets, project descriptions, rewritten skills) per Meet's
+// product call 2026-06-21 (see PROGRESS Decisions log). The PDF is the
+// only surface where the work is visible; this caption is the CTA.
+//
+// What we DO surface (none of it copy-pasteable as a usable resume):
+//   • Student's own name (they typed it; not a leak)
+//   • ATS score for the targeted role (numeric only — no copyable text)
+//   • Count of matched JD keywords (count + 3 short tokens) — answers
+//     "did the rewriter actually tailor to my JD?" without revealing the
+//     rewritten bullets
+//   • "ATS can't read this watermarked version" — the conversion driver
+//   • Sub-60 improvement hints (generic; reveal nothing about content)
 function buildPreview(session) {
   const r = session.resume_json_rewritten;
   if (!r) return 'Generation failed. Type "reset" to try again.';
 
   const lines = [];
-  lines.push(`✓ Resume ready! Preview:`);
+  lines.push(`✓ Resume tayar — open the PDF above to review.`);
+  if (r.name) lines.push(`_For: ${r.name}_`);
   lines.push('');
 
-  if (r.name) lines.push(`*${r.name}*`);
-  if (r.summary) lines.push(`${whatsappBold(r.summary)}`);
-  lines.push('');
-
-  const skillLines = summarizeSkills(r.skills);
-  if (skillLines.length > 0) {
-    lines.push(`*Skills:*`);
-    for (const s of skillLines) lines.push(`• ${s}`);
-    lines.push('');
-  }
-
-  if (r.experience && r.experience.length > 0) {
-    lines.push(`*Experience:*`);
-    for (const e of r.experience.slice(0, 2)) {
-      const header = [e.role, e.company].filter(Boolean).join(' @ ') + (e.dates ? ` (${e.dates})` : '');
-      lines.push(header);
-      if (Array.isArray(e.tech_stack) && e.tech_stack.length > 0) {
-        lines.push(`_${e.tech_stack.join(' · ')}_`);
-      }
-      for (const b of (e.bullets || []).slice(0, 3)) lines.push(`• ${whatsappBold(b)}`);
-    }
-    lines.push('');
-  }
-
-  if (r.projects && r.projects.length > 0) {
-    lines.push(`*Projects (${r.projects.length}):*`);
-    for (const [i, p] of r.projects.slice(0, 3).entries()) {
-      const title = p.name || `Project ${i + 1}`;
-      lines.push(`${i + 1}. ${title}`);
-      if (Array.isArray(p.tech_stack) && p.tech_stack.length > 0) {
-        lines.push(`   _${p.tech_stack.join(' · ')}_`);
-      }
-      for (const b of (p.bullets || []).slice(0, 2)) lines.push(`   • ${whatsappBold(b)}`);
-    }
-    if (r.projects.length > 3) lines.push(`+${r.projects.length - 3} more in full resume`);
-    lines.push('');
-  }
-
-  const matched = keywordsMatched(r, session.jd_keywords);
-  if (matched.length > 0) {
-    lines.push(`*Your skills matching the JD:* ${matched.slice(0, 10).join(', ')}`);
-  } else if (session.jd_keywords && session.jd_keywords.length > 0) {
-    lines.push(`*JD keywords (for reference):* ${session.jd_keywords.slice(0, 6).join(', ')}\n_(No direct overlap with your skills — rewriter still tailored framing to the role.)_`);
-  }
-
-  // ATS score block — PRD §11.2.
+  // ATS score — primary "is it any good?" signal.
   if (typeof session.ats_score === 'number') {
+    const target = session.jd_role || session.jd_role_title || 'this role';
+    lines.push(`*ATS Score:* ${session.ats_score}/100 for ${target}`);
+  }
+
+  // Matched-skill COUNT (not full list). 3-token tease is enough signal
+  // without giving a usable skill section.
+  const matched = keywordsMatched(r, session.jd_keywords);
+  const jdN = Array.isArray(session.jd_keywords) ? session.jd_keywords.length : 0;
+  if (matched.length > 0 && jdN > 0) {
+    const tease = matched.slice(0, 3).join(', ') + (matched.length > 3 ? ', …' : '');
+    lines.push(`*JD match:* ${matched.length}/${jdN} keywords (${tease})`);
+  }
+
+  // Sub-60 hints — generic improvement nudges, no content reveal.
+  if (typeof session.ats_score === 'number' && session.ats_score < 60 &&
+      Array.isArray(session.ats_suggestions) && session.ats_suggestions.length > 0) {
     lines.push('');
-    lines.push(`*ATS Score:* ${session.ats_score}/100`);
-    if (session.ats_score < 60 && Array.isArray(session.ats_suggestions) && session.ats_suggestions.length > 0) {
-      lines.push(`_To improve:_`);
-      for (const s of session.ats_suggestions) lines.push(`  • ${s}`);
-    }
+    lines.push(`_To improve:_`);
+    for (const s of session.ats_suggestions) lines.push(`  • ${s}`);
   }
 
   lines.push('');
-  lines.push(`Type "show me" for full JSON.`);
+  lines.push(`⚠️  Watermarked + ATS-unreadable (ATS can't parse images).`);
+  lines.push(`₹49 unlock = clean text-parseable PDF that Naukri reads.`);
+  lines.push('');
+  lines.push(`Type "edit" to refine, or "pay" to unlock the clean version.`);
 
   let out = lines.join('\n');
-  if (out.length > 1500) out = out.slice(0, 1480) + '\n…(truncated)';
+  // Hard cap; should be well under this anyway now.
+  if (out.length > 900) out = out.slice(0, 880) + '\n…';
   return out;
 }
 

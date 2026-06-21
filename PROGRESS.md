@@ -223,7 +223,9 @@ Carry these forward each session until resolved. Add new ones whenever a build d
 ### 6.4 Flake handling
 LLM responses and Supabase uploads can intermittently fail under network jitter or rate limits. Policy: **re-run `npm run check` once** before assuming a real regression. If it fails twice in a row on the same check → real regression, fix.
 
-**Flake source (mitigated 2026-06-21):** `src/state/generator.js` parallelises keywords + rewrite. Rewrite timeout bumped from 11s → 13s after multiple cold-start flakes in `npm run check`. We're parallel with keywords (typically 2-4s), so critical path is rewrite alone; the bump fits inside Twilio's 15s window when render+watermark+upload add ~3-4s on the happy path. Monitor in production for any 15s-budget breaches.
+**Flake sources (mitigated 2026-06-21):**
+1. Rewrite timeout bumped from 11s → 13s after cold-start flakes. Critical path stays inside Twilio's 15s budget (parallel with keywords).
+2. 3s cool-down between suites in `.runtime/check.js`. Without it, back-to-back LLM-heavy E2E tests produced ~1 transient failure per 3 runs (OpenAI/Puppeteer/Supabase didn't enjoy bursts). With the pause, two consecutive `npm run check` runs both green.
 
 ---
 
