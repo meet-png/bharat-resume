@@ -1,14 +1,45 @@
 // Razorpay Payment Links + webhook verification. PRD §12.
-// Signature verification implemented now (security-critical) even though the rest
-// of the payment flow is Day 5. Razorpay signs webhook payloads with HMAC-SHA256
+// Signature verification implemented Day 1 (security-critical); link creation +
+// fulfilment added Day 5.2. Razorpay signs webhook payloads with HMAC-SHA256
 // using RAZORPAY_WEBHOOK_SECRET; we compute the same and timingSafeEqual.
 const crypto = require('crypto');
+const Razorpay = require('razorpay');
 const { config } = require('../config');
+const logger = require('../logger');
 
-// TODO Day 5: createPaymentLink → POST /v1/payment_links, ₹49 (4900 paise),
-//   callback_url = `${BASE_URL}/payment-success`, return { id, short_url }.
-async function createPaymentLink(_args) {
-  throw new Error('createPaymentLink not implemented (Day 5)');
+// ₹49 unlock for the clean, ATS-readable PDF (PRD §12).
+const UNLOCK_AMOUNT_PAISE = 4900;
+
+let rzpClient = null;
+function getRzp() {
+  if (rzpClient) return rzpClient;
+  if (!config.RAZORPAY_KEY_ID || !config.RAZORPAY_KEY_SECRET) {
+    throw new Error('RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET not set');
+  }
+  rzpClient = new Razorpay({
+    key_id: config.RAZORPAY_KEY_ID,
+    key_secret: config.RAZORPAY_KEY_SECRET,
+  });
+  return rzpClient;
+}
+
+// Creates a ₹49 Razorpay Payment Link. The phone hash (NOT the raw number) is
+// stored in `notes` so the webhook can map the payment back to a session
+// without putting PII in Razorpay's dashboard. Returns { id, short_url }.
+async function createPaymentLink({ phoneHash }) {
+  if (!phoneHash) throw new Error('createPaymentLink: phoneHash required');
+  const rzp = getRzp();
+  const link = await rzp.paymentLink.create({
+    amount: UNLOCK_AMOUNT_PAISE,
+    currency: 'INR',
+    description: 'BHARAT RESUME - clean ATS-readable PDF unlock',
+    notes: { phone_hash: String(phoneHash) },
+    callback_url: `${config.BASE_URL}/payment-success`,
+    callback_method: 'get',
+    reminder_enable: false,
+  });
+  logger.info({ id: link.id, phoneHash: String(phoneHash).slice(0, 12) }, 'razorpay payment link created');
+  return { id: link.id, short_url: link.short_url };
 }
 
 function verifyWebhookSignature(rawBody, signatureHeader) {
@@ -36,4 +67,4 @@ function verifyWebhookSignature(rawBody, signatureHeader) {
   return crypto.timingSafeEqual(a, b);
 }
 
-module.exports = { createPaymentLink, verifyWebhookSignature };
+module.exports = { createPaymentLink, verifyWebhookSignature, UNLOCK_AMOUNT_PAISE };

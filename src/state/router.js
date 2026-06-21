@@ -4,6 +4,7 @@ const { pickPrompt, pickMessage } = require('./prompts');
 const { extractSection, SECTION_CONFIG } = require('../llm/extract');
 const { runGeneration, buildPreview } = require('./generator');
 const { deliverPdf } = require('./delivery');
+const { createPaymentLink } = require('../payment/razorpay');
 const { getSession, setSession, checkRateLimit, RATELIMIT_MAX } = require('../store/redis');
 const logger = require('../logger');
 
@@ -15,6 +16,7 @@ const JD_MARKER_RE = /\b(responsibilit|requirement|qualification|years? of exper
 const URL_RE = /^https?:\/\//i;
 const SHOW_RE = /^\s*show\s*me\s*$/i;
 const RESET_RE = /^\s*reset\s*$/i;
+const PAY_RE = /^\s*(pay|pay now|unlock|buy|purchase|₹?\s*49|haan pay)\s*$/i;
 
 function classifyJdInput(text) {
   const t = String(text || '').trim();
@@ -57,12 +59,32 @@ async function tryGenerate(session, phoneFrom, phoneHash) {
     session.state = STATES.DELIVERED;
     const text = buildPreview(session);
     if (delivery && delivery.signedUrl) {
-      return { text: text + '\n\n📎 Watermarked PDF attached. Day 5: ₹49 unlock for clean ATS-readable version.', media: delivery.signedUrl };
+      return { text, media: delivery.signedUrl };
     }
     return text + '\n\n(PDF delivery failed — preview only. Check server logs.)';
   } catch (e) {
     logger.error({ err: e.message, stack: e.stack }, 'generation pipeline failed');
     return pickMessage('generationFailed');
+  }
+}
+
+// Creates (or re-sends) the ₹49 Razorpay link and moves to AWAITING_PAYMENT.
+// Caller persists the session. Returns a string reply.
+async function startPayment(session, phoneHash) {
+  // Re-use an existing link if one was already created for this session.
+  if (session.payment_link_url) {
+    session.state = STATES.AWAITING_PAYMENT;
+    return pickMessage('paymentLink', { url: session.payment_link_url });
+  }
+  try {
+    const link = await createPaymentLink({ phoneHash });
+    session.razorpay_payment_link_id = link.id;
+    session.payment_link_url = link.short_url;
+    session.state = STATES.AWAITING_PAYMENT;
+    return pickMessage('paymentLink', { url: link.short_url });
+  } catch (e) {
+    logger.error({ err: e.message }, 'createPaymentLink failed');
+    return pickMessage('paymentLinkFailed');
   }
 }
 
@@ -95,6 +117,9 @@ async function handle({ phoneHash, body, phoneFrom }) {
   }
 
   session.last_message_at = new Date().toISOString();
+  // Persist the WhatsApp address (server-side only, private Redis) so the
+  // post-payment webhook can push the clean PDF outbound. Never logged/exposed.
+  if (phoneFrom) session.phone_from = phoneFrom;
 
   // show me: dump rewritten resume if available (post-generation), else collected raw.
   if (SHOW_RE.test(trimmed)) {
@@ -108,9 +133,27 @@ async function handle({ phoneHash, body, phoneFrom }) {
 
   const current = session.state;
 
-  // --- DELIVERED: post-generation. show me handled above; edits land Day 5. ---
+  // --- DELIVERED: watermarked PDF sent. "pay" → create link; edits land Day 5.3. ---
   if (current === STATES.DELIVERED) {
+    if (PAY_RE.test(trimmed)) {
+      const reply = await startPayment(session, phoneHash);
+      await setSession(phoneHash, session);
+      return reply;
+    }
     return pickMessage('deliveredHelp');
+  }
+
+  // --- AWAITING_PAYMENT: link sent, waiting on the Razorpay webhook. ---
+  if (current === STATES.AWAITING_PAYMENT) {
+    if (PAY_RE.test(trimmed) && session.payment_link_url) {
+      return pickMessage('paymentLink', { url: session.payment_link_url });
+    }
+    return pickMessage('awaitingPayment', { url: session.payment_link_url || '' });
+  }
+
+  // --- PAID_COMPLETE: clean PDF delivered. Terminal. ---
+  if (current === STATES.PAID_COMPLETE) {
+    return pickMessage('paidComplete');
   }
 
   // --- GENERATING: usually transient — pipeline runs inline on entry. If we

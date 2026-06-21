@@ -190,9 +190,35 @@ const MESSAGES = {
   ],
 
   deliveredHelp: [
-    "Resume ready hai. Type 'show me' for full JSON. Edit / PDF / ATS — Day 4-5 mein.",
-    "Done! 'show me' to view the full rewritten resume. Edits coming in Day 5.",
-    "Resume tayar. 'show me' likh ke poora dekh sakte hain. Free-text edits Day 5.",
+    "Watermarked resume bhej diya ☝️ Type 'pay' to unlock the clean ATS-readable version for ₹49.",
+    "Aapka watermarked PDF upar hai. 'pay' likhiye to unlock the clean version (₹49).",
+    "Resume tayar (watermarked). Reply 'pay' for the clean, Naukri-readable PDF — just ₹49.",
+  ],
+
+  // Sent when the student types 'pay' — carries the Razorpay short URL.
+  paymentLink: [
+    "Yahan se ₹49 pay kar dijiye, clean PDF turant aa jayega 👇\n{url}",
+    "Almost there! Pay ₹49 here and I'll send the clean ATS-readable resume right away:\n{url}",
+    "Clean version unlock karne ke liye ₹49 here 👇 Payment ke baad PDF auto-deliver:\n{url}",
+  ],
+
+  paymentLinkFailed: [
+    "Payment link banane mein dikkat aa gayi. 30s baad 'pay' phir try kariye.",
+    "Couldn't create the payment link just now — type 'pay' again in a moment.",
+    "Hmm, link generate nahi hua. Thoda ruk ke 'pay' dobara bhejiye.",
+  ],
+
+  // Student messages while we're waiting on the Razorpay webhook.
+  awaitingPayment: [
+    "Payment ka wait kar raha hu ⏳ Pay here and the clean PDF auto-arrives:\n{url}",
+    "Bas payment hote hi clean resume bhej dunga. Link:\n{url}",
+    "Waiting for your ₹49 payment ⏳ Once done, clean PDF comes automatically:\n{url}",
+  ],
+
+  paidComplete: [
+    "Payment ho chuka hai ✓ Clean resume aapko bhej diya. All the best! 🎉",
+    "Done & paid ✓ Aapka clean ATS-readable resume deliver ho gaya. Good luck!",
+    "Sab set ✓ Clean version already sent. Type 'reset' for a fresh resume anytime.",
   ],
 
   beyondPhase2: [

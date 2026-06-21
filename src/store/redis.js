@@ -42,6 +42,21 @@ async function deleteSession(phoneHash) {
   await getClient().del(`session:${phoneHash}`);
 }
 
+// Payment idempotency (PRD §12). Razorpay retries webhooks on non-2xx, so the
+// same payment_id can arrive multiple times. First writer wins: returns true
+// only the first time a given payment is seen. 7-day TTL covers all retries.
+const PAYMENT_DEDUPE_TTL_SEC = 7 * 24 * 60 * 60;
+
+async function markPaymentProcessed(paymentId) {
+  const res = await getClient().set(`razorpay_paid:${paymentId}`, '1', 'EX', PAYMENT_DEDUPE_TTL_SEC, 'NX');
+  return res === 'OK';
+}
+
+// Releases the dedupe lock so a failed fulfilment can be retried by Razorpay.
+async function unmarkPaymentProcessed(paymentId) {
+  await getClient().del(`razorpay_paid:${paymentId}`);
+}
+
 // Returns { allowed, count, resetInSec }.
 async function checkRateLimit(phoneHash) {
   const key = `ratelimit:${phoneHash}`;
@@ -57,6 +72,8 @@ module.exports = {
   getSession,
   setSession,
   deleteSession,
+  markPaymentProcessed,
+  unmarkPaymentProcessed,
   checkRateLimit,
   SESSION_TTL_SEC,
   RATELIMIT_WINDOW_SEC,

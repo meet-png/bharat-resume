@@ -18,8 +18,7 @@
 | 2 | Fri 20 – Sun 21 Jun | State machine + info collection | ✅ Done | Full Phase 2 flow live: 13 sections, sufficiency-aware extraction, role-aware clarifications, GitHub repo enrichment for projects, 3-path JD (URL / role-name / generic / full JD text), Hinglish+English only (Latin script), 4 variants per state. 7-block offline smoke (`.runtime/smoke-router.js`) all pass. Verified end-to-end on WhatsApp. |
 | 3 | Sat 21 Jun | LLM rewrite + JD scrape | ✅ Done | Generation pipeline runs in ~8s (scrape + keywords + rewrite). Rewriter voice locked to `docs/template-reference.md` (Meet's actual resume). Preview shows Meet-style summary, action-verb bullets with selective `**bold**` on metrics, real keyword intersection (not raw JD list). 4 field-test bugs fixed: name re-asked, project link never asked, cert link never asked, weak preview / inflated keyword stuffing. |
 | 4 | Sun 22 Jun | PDF rendering + watermark | ✅ Done | WhatsApp delivers a real PDF: rewriter (Meet-template voice + 2-3 multi-angle bullets) → Handlebars HTML (Georgia + reference palette) → Puppeteer PDF → rasterized watermark → Supabase upload → 60s signed URL → Twilio `<Media>`. ~13s end-to-end. Six template-quality issues fixed (multi-metric bullets, per-entry tech stack inline italic, coursework state, achievement sufficiency, PoR pending accumulator, "Your skills matching the JD" labels real intersection). Regression contract live: `npm run check`. |
-| 5 | Mon 23 Jun | ATS score + payment + edit loop | ⬜ Next | ATS scorer must reward bullet density + metric count, not just keyword match (Meet's note). Then Razorpay payment links + webhook flow + clean-PDF unlock. Free-text edit loop. |
-| 4 | Sun 22 Jun | PDF rendering + watermark | ⬜ Not started | |
+| 5 | Mon 23 Jun | ATS score + payment + edit loop | 🟡 Partial | **5.1 ATS scorer ✅** (rewards bullet density + metric count, not just keyword match). **5.2 Razorpay payment unlock ✅** — `pay` → ₹49 Payment Link → `payment_link.paid` webhook → clean (un-watermarked) PDF regenerated + pushed outbound via Twilio API. Idempotent against webhook retries (Redis dedupe lock + unmark-on-failure). State graph: DELIVERED → AWAITING_PAYMENT → PAID_COMPLETE. **5.3 free-text edit loop ⬜ next.** |
 | 6 | Tue 24 Jun | Telemetry, dashboard, deploy, dry run | ⬜ Not started | |
 | 7 | Wed 25 Jun | Launch to 100 | ⬜ Not started | |
 
@@ -33,6 +32,7 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 - Express server boots on `:3000` with pino logging, `helmet`, body-size cap, `trust proxy: 1`, and a startup banner that logs `routerMtime` so "old code still running" can never be a silent bug.
 - `GET /health`, `POST /webhook/twilio` (signature-validated), `POST /webhook/razorpay` (HMAC verified), `GET /admin/metrics` (basic auth gated stub).
 - Razorpay test-mode Payment Link round-trip verified; HMAC signature verifier proven correct against valid/tampered/missing.
+- **Payment unlock (Day 5.2)**: `pay` in DELIVERED creates a ₹49 link (`src/payment/razorpay.js#createPaymentLink`, phone *hash* in `notes`, never the raw number). `POST /webhook/razorpay` verifies the HMAC, parses `payment_link.paid`, and `src/payment/fulfill.js#fulfillPayment` regenerates the clean PDF + pushes it outbound (`src/messaging/twilio.js#sendWhatsApp`). Idempotent: Redis `razorpay_paid:{payment_id}` NX lock (released on unexpected failure so Razorpay retries can re-run). Outbound send failure does NOT roll back a settled payment. `phone_from` persisted server-side on the session (private Redis only, never logged) so the async webhook can reach the student.
 - Supabase Postgres: 4 tables + 2 indexes + RLS, `db/schema.sql` is source of truth. `resumes` storage bucket private.
 - Upstash Redis (Mumbai): session store, JD cache key prefix, and rate limit (`30/60s per phone`) all wired. Helpers in `src/store/redis.js`.
 - **Day 2 state machine** (`src/state/router.js`): full PRD §6 state graph, NEW/CONFIRM_START unified, `reset` seeds AWAITING_CONFIRM_START and replies with confirmation + welcome in one message. SKIP_RE handles `skip`/`no`/`nahi`/`nope`/`none`/`nothing`. Top-of-handler tracing with branch/state/bodyHead logs.
@@ -47,8 +47,7 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 **Scaffolded but not implemented (stubs throw, with `TODO Day N` markers):**
 - `src/llm/{rewrite,edit,keywords}.js` — Day 3 (rewriter takes raw `resume_json` + JD context → impact-oriented English) / Day 5 (edit prompt for free-text edits)
 - `src/jd/scrape.js` (Day 3 — Naukri Puppeteer scraper)
-- `src/resume/{render,pdf,watermark,ats_score}.js` (Day 4–5)
-- Day 5: payment link creation, edit loop wiring, regenerate-on-paid
+- Day 5.3: free-text edit loop (edit prompt → re-rewrite specific sections → regenerate watermarked PDF)
 - `src/store/{postgres,storage}.js` — query helpers + signed-URL helpers
 - `src/telemetry/events.js` (Day 6 — event taxonomy constant defined)
 - `src/templates/resume.hbs` — head/contact only; sections TODO (Day 4)
@@ -161,6 +160,30 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 
 ---
 
+### Session — 2026-06-21 (Day 5.2, Claude Opus 4.7)
+
+**Did (Razorpay payment unlock, fully verified):**
+- `createPaymentLink({ phoneHash })` — real Razorpay SDK, ₹49 (4900 paise) test-mode link. Phone **hash** (not number) goes in `notes.phone_hash` so the webhook maps back to a session without putting PII in Razorpay's dashboard.
+- `POST /webhook/razorpay` now live: HMAC-verify → parse → branch on `payment_link.paid` → `fulfillPayment`. Non-payment events 200-acked and ignored. Bad JSON → 400.
+- `src/payment/fulfill.js#fulfillPayment` — dedupe lock (NX) → load session → mark paid → regenerate clean PDF (`deliverPdf({ clean: true })`) → push outbound. Lock released on *unexpected* error so Razorpay retry re-runs; terminal cases (no hash / expired session) are acked. Outbound send wrapped in its own try so a delivery failure never rolls back a settled payment.
+- `src/messaging/twilio.js#sendWhatsApp` — new outbound API client (inbound still uses TwiML; the post-payment PDF is async so it needs a REST push).
+- Router: `pay` in DELIVERED → `createPaymentLink` → AWAITING_PAYMENT (link in reply). AWAITING_PAYMENT re-sends link on nudge. PAID_COMPLETE terminal. `phone_from` now persisted on every inbound for the webhook to use.
+- New regression suite `.runtime/test-payment.js` (19 checks) registered in `check.js`. Covers signature accept/reject/tamper, real test-mode link creation, router pay-flow, clean-PDF fulfilment, idempotency (duplicate webhook = no-op), and graceful no-hash handling.
+
+**Surprises:**
+- Twilio `messages.create` to an unjoined sandbox number still returns a SID (queued) and consumes a send — so the test now nulls `phone_from` before fulfilment to avoid firing a real outbound on every `npm run check`. The send path is integration-tested manually instead.
+
+**Decisions made (also in README Decisions log):**
+- Lazy link creation (on `pay`), not auto-on-DELIVERED — avoids a Razorpay link for every student who never pays.
+- Phone *hash* in Razorpay `notes`; raw number stays in private Redis session only.
+- Idempotency via Redis NX lock with unmark-on-failure, rather than a Postgres payments-row check — simpler, and the session is already the source of truth at prototype scale.
+
+**Next session — Day 5.3 (free-text edit loop):**
+1. Read PRD §5 Phase 4 (edit loop), §7.3 (edit prompt).
+2. `src/llm/edit.js` — take the rewritten resume + a free-text edit request → return a patched `resume_json_rewritten` (targeted, not full re-rewrite).
+3. Router: `edit` in DELIVERED → AWAITING_EDIT_OR_DONE → apply edit → regenerate watermarked PDF → back to DELIVERED. Iteration cap (PRD §20 open item).
+4. Add edit-loop regression to the suite.
+
 ## 4. Open questions for Meet
 
 Carry these forward each session until resolved. Add new ones whenever a build decision needs Meet's input.
@@ -185,7 +208,7 @@ Carry these forward each session until resolved. Add new ones whenever a build d
 
 ## 6. Regression contract — "must keep working"
 
-`npm run check` runs `.runtime/check.js` which invokes three test files. They take ~2 min total and burn ~$0.05 of OpenAI per run. Each is a real end-to-end test against live OpenAI, Supabase, and Redis.
+`npm run check` runs `.runtime/check.js` which invokes five test files. They take ~2.5 min total and burn ~$0.05 of OpenAI per run. Each is a real end-to-end test against live OpenAI, Supabase, Redis, and (for payment) Razorpay test mode.
 
 **The contract:** anything below is currently verified working. If a future edit breaks any of these, the check fails and you DO NOT commit until it's fixed (or Meet has explicitly approved the change in behavior).
 
@@ -220,7 +243,15 @@ Carry these forward each session until resolved. Add new ones whenever a build d
 - Within Twilio 15s webhook budget.
 - Signed URL returns 200, `application/pdf` content-type, valid `%PDF-` header, >5KB.
 
-### 6.4 Flake handling
+### 6.4 `test-payment.js` — Razorpay unlock, ~15s
+- **Webhook signature**: valid HMAC accepted; tampered sig / missing sig / tampered body all rejected.
+- **createPaymentLink**: real test-mode call returns `plink_…` id + HTTPS `short_url` (skips gracefully if keys absent).
+- **Router pay flow**: `pay` in DELIVERED → AWAITING_PAYMENT, `payment_link_url` stored, reply carries the URL, `phone_from` persisted.
+- **fulfillPayment**: marks `paid`, records `razorpay_payment_id`, advances to PAID_COMPLETE, produces a `clean: true` PDF version; `no_phone_from` path returns ok (no crash).
+- **Idempotency**: a second identical webhook is a no-op (`duplicate: true`). Missing `phone_hash` handled gracefully (no throw).
+- **PAID_COMPLETE** is terminal (no router fallthrough).
+
+### 6.5 Flake handling
 LLM responses and Supabase uploads can intermittently fail under network jitter or rate limits. Policy: **re-run `npm run check` once** before assuming a real regression. If it fails twice in a row on the same check → real regression, fix.
 
 **Flake sources (mitigated 2026-06-21):**
