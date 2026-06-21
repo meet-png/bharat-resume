@@ -15,7 +15,8 @@
 |---|---|---|---|---|
 | 1 | Thu 19 Jun | Scaffolding + WhatsApp echo | ✅ Done | Verified live: WhatsApp → Twilio Sandbox → ngrok (static domain `babble-fifteen-rust.ngrok-free.dev`) → Express → TwiML reply. |
 | 2 | Fri 20 – Sun 21 Jun | State machine + info collection | ✅ Done | Full Phase 2 flow live: 13 sections, sufficiency-aware extraction, role-aware clarifications, GitHub repo enrichment for projects, 3-path JD (URL / role-name / generic / full JD text), Hinglish+English only (Latin script), 4 variants per state. 7-block offline smoke (`.runtime/smoke-router.js`) all pass. Verified end-to-end on WhatsApp. |
-| 3 | Sat 21 – Mon 22 Jun | LLM rewrite + JD scrape | ⬜ Not started | Calendar slipped one day vs PRD §18; the role-aware infra built in Day 2 will accelerate Day 3. |
+| 3 | Sat 21 Jun | LLM rewrite + JD scrape | ✅ Done | Generation pipeline runs in ~8s (scrape + keywords + rewrite). Rewriter voice locked to `docs/template-reference.md` (Meet's actual resume). Preview shows Meet-style summary, action-verb bullets with selective `**bold**` on metrics, real keyword intersection (not raw JD list). 4 field-test bugs fixed: name re-asked, project link never asked, cert link never asked, weak preview / inflated keyword stuffing. |
+| 4 | Sun 22 Jun | PDF rendering + watermark | 🟡 Starting | Goal: WhatsApp delivers a real PDF (watermarked, ATS-unreadable on free tier per PRD §10). |
 | 4 | Sun 22 Jun | PDF rendering + watermark | ⬜ Not started | |
 | 5 | Mon 23 Jun | ATS score + payment + edit loop | ⬜ Not started | |
 | 6 | Tue 24 Jun | Telemetry, dashboard, deploy, dry run | ⬜ Not started | |

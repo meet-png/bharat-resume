@@ -9,12 +9,15 @@ const router = express.Router();
 
 router.post('/', validateTwilioRequest, async (req, res) => {
   const body = (req.body && req.body.Body) || '';
-  const phoneHash = hashPhone(req.body && req.body.From);
+  const phoneFrom = (req.body && req.body.From) || '';
+  const phoneHash = hashPhone(phoneFrom);
   req.log.info({ from: shortHash(phoneHash), bodyLen: body.length }, 'inbound whatsapp');
 
   let reply;
   try {
-    reply = await handle({ phoneHash, body });
+    // phoneFrom is transient — used only to populate resume.phone at rewrite time.
+    // Never logged raw, never stored raw, never persisted.
+    reply = await handle({ phoneHash, body, phoneFrom });
   } catch (e) {
     req.log.error({ err: e.message }, 'router handle failed');
     reply = 'Server pe kuch issue hai. 30s baad try kariye.';

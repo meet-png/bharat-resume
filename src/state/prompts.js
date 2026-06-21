@@ -169,10 +169,23 @@ const MESSAGES = {
     "Theek hai — '{role}' ko target karke resume banayenge.",
   ],
 
+  // Used as a fallback only — Day 3 now actually generates inline.
   generatingDone: [
-    "Bas! All details collected ✓ Resume generation Day 3 mein implement hoga. Type 'show me' to peek at collected data.",
-    "Done collecting ✓ Day 3 will turn this into your actual PDF. Try 'show me' to see what we got.",
-    "Sab data ready ✓ PDF generation Day 3 ka kaam hai. 'show me' likh ke abhi snapshot dekh sakte hain.",
+    "Bas! All details collected ✓ Saathi resume bana raha hai — 30s do.",
+    "Done collecting ✓ Resume tailoring in progress.",
+    "Sab data ready ✓ Generating your tailored resume now.",
+  ],
+
+  generationFailed: [
+    "Resume generation atak gayi. Type 'reset' to start over, ya try again in a moment.",
+    "Generation hit a snag. Try again with 'reset', or message me in 30s.",
+    "Couldn't finish the rewrite. Reset and try again — backend hiccup most likely.",
+  ],
+
+  deliveredHelp: [
+    "Resume ready hai. Type 'show me' for full JSON. Edit / PDF / ATS — Day 4-5 mein.",
+    "Done! 'show me' to view the full rewritten resume. Edits coming in Day 5.",
+    "Resume tayar. 'show me' likh ke poora dekh sakte hain. Free-text edits Day 5.",
   ],
 
   beyondPhase2: [

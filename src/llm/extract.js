@@ -9,7 +9,17 @@ const logger = require('../logger');
 
 const SECTION_CONFIG = {
   AWAITING_NAME: {
-    instruction: 'Extract the student\'s full name. Title-case it (e.g., "Aditya Kumar"). If the message is too short or unclear, set name to null and add a clarification.',
+    instruction: `Extract the student's full name. Title-case it (e.g., "Aditya Kumar", "Meet Kabra").
+
+ACCEPT LIBERALLY. Valid names span many shapes in India:
+- 1 word: "Madonna" (rare but valid)
+- 2 words: "Meet Kabra", "Aditya Kumar"
+- 3+ words: "Aditya Pratap Singh", "S. Ramanujan Iyer", "Dr. A.P.J. Abdul Kalam"
+- With dots/apostrophes: "O'Connor", "M.K. Patel"
+
+If the input is a 1-5 word string that reads like a person's name (letters, optional dots/apostrophes/hyphens, possibly title prefix like "Dr.", no digits, no symbols other than . ' -), ACCEPT it — set name to the title-cased version and clarification_needed to null.
+
+ONLY set name=null and ask a clarification if the input is clearly NOT a name: a single word like "haan"/"yes"/"skip", gibberish ("asdfgh"), an email, a URL, a question. Even one-word inputs that look name-like should be accepted.`,
     shape: '{ "name": string | null, "clarification_needed": string | null }',
     merge: (rj, x) => { if (x.name) rj.name = x.name; },
   },
@@ -111,38 +121,96 @@ NEVER re-ask the whole thing.`,
     },
   },
 
-  // PROJECTS — sufficiency + role-aware + GitHub repo enrichment.
+  // PROJECTS — example-driven; LLM follows worked examples rather than abstract rules.
+  // The "link before impact" sequencing + cross-turn link-decline tracking are the tricky parts.
   AWAITING_PROJECTS: {
-    instruction: `Extract details for ONE project. tech_stack means "tools/tech/methods used" — for non-tech projects (marketing campaign, design portfolio piece, civil engineering work) it holds whatever tools/methods/platforms were actually used.
+    instruction: `Extract ONE project per message. tech_stack = whatever tools/tech/methods/platforms the student used (works for tech AND non-tech roles).
 
-Required pieces for "sufficient":
-  (a) name
-  (b) what it accomplishes + the key tools/tech/methods used (calibrated to TARGET ROLE context above)
-  (c) at least one bullet describing the student's concrete contribution or measurable impact
+LIBERAL NAME EXTRACTION:
+Any noun phrase from what the student made counts as a valid project name. Title-case it. Examples:
+- "Made a project on sales prediction" → name = "Sales Prediction"
+- "Built a chatbot for customer support" → name = "Customer Support Chatbot"
+- "Worked on a portfolio site" → name = "Portfolio Site"
+- "Created an ETL pipeline for retail" → name = "Retail ETL Pipeline"
+Only set name=null if the message has no information about what was built.
 
-If a "GitHub repo data" block appears in context, USE IT to fill tech_stack, what-it-does, and bullets — that's why we fetched it. Do not re-ask the student for tech stack if the repo already lists languages.
+A project is SUFFICIENT only when all four are true:
+  (a) name (extracted liberally as above)
+  (b) tech_stack OR a description of what it does
+  (c) at least one bullet with a SPECIFIC NUMBER ("85%", "200 users", "12K rows") — soft qualifiers ("good", "many", "great", "fast") do NOT count
+  (d) github_url is a real URL, OR pending_project._link_declined === true
 
-If the message extends an existing pending_project (already in resume_json.pending_project), MERGE — don't discard.
+LINK-DECLINE DETECTION:
+If the current message contains any of: "no link", "skip link", "private", "private repo", "no repo", "not public", "github nahi", "nahi link", "link nahi", "no github" — set link_declined = true in your output. Router persists this to pending_project._link_declined.
 
-After extraction, evaluate sufficiency:
-- If (a), (b), (c) present → clarification_needed = null.
-- If missing → set clarification_needed to a TARGETED Hinglish/English follow-up asking ONLY for the missing piece.
+CLARIFICATION RULES (ask ONLY ONE missing piece per turn):
 
-CRITICAL — DO NOT copy these examples verbatim. They're patterns to ADAPT to the TARGET ROLE:
-  - Tech project, missing impact: "Kitne users ne use kiya, kya perf improvement mili, kya scale handle kiya?"
-  - Marketing project, missing impact: "Campaign reach kya thi, CTR / conversion kitna improve hua?"
-  - Design project, missing impact: "Kitne users tak pahuncha, adoption kitna increase hua, A/B test result?"
-  - Sales project, missing impact: "Pipeline / revenue kitna grow kiya, deal size kya thi?"
-  - Civil/mech project, missing impact: "Project size (budget, sq ft, timeline saved)? Safety / quality outcome?"
-  - For other domains, ask for the metric NATIVE to that field.
+CASE A — only (a) missing (message has no project content):
+  Ask only for what they built. Example: "Kya banaya tha project mein? Naam aur 1-2 lines."
 
-Same role-tailoring for "missing contribution" and "missing description". NEVER re-ask everything. NEVER assume tech bias if the role isn't tech.`,
-    shape: '{ "project": { "name": string | null, "tech_stack": [string], "dates": string | null, "github_url": string | null, "bullets": [string] } | null, "clarification_needed": string | null }',
+CASE B — (a) present, (b) missing:
+  Ask for tech / description. Example: "Kis tech / tool se banaya? Aur kya karta hai project?"
+
+CASE C — (a) and (b) present, (d) missing AND _link_declined NOT true:
+  Ask ONLY for the link. NEVER mention impact/accuracy/metric here.
+  Examples:
+    "GitHub link bhej dijiye? Ya deployed URL / demo? 'no link' agar private hai."
+    "Repo link ya live URL? 'no link' agar nahi share kar sakte."
+
+CASE D — link sorted (URL present OR _link_declined=true) AND (c) vague/missing:
+  Ask ONLY for a specific number. Adapt to the project type and TARGET ROLE.
+  Examples:
+    Tech project: "Cool. Exact accuracy number kya tha — 85%? 92%?"
+    Marketing: "Campaign reach kya thi, CTR kitna improve hua?"
+    Design: "Kitne users tak pahuncha, adoption / conversion lift kya tha?"
+
+CASE E — all four ✓ → clarification_needed = null.
+
+WORKED EXAMPLES (study these — they show exactly what to output):
+
+Example 1 — fresh message with vague impact and no link:
+  Input: "Made a project on sales prediction using python, used machine learning, got good accuracy"
+  Your output:
+    project: { name: "Sales Prediction", tech_stack: ["Python","Machine Learning"], bullets: ["got good accuracy"], github_url: null, dates: null }
+    link_declined: false
+    clarification_needed: "GitHub link bhej dijiye? Ya deployed URL / demo? 'no link' agar private hai."
+  (This is CASE C. Do NOT ask about accuracy yet — link comes first.)
+
+Example 2 — follow-up: student declines link:
+  pending_project before: { name: "Sales Prediction", tech_stack: ["Python","ML"], bullets: ["got good accuracy"], github_url: null }
+  Input: "no link"
+  Your output:
+    project: {} (no new fields)
+    link_declined: true
+    clarification_needed: "Cool. Exact accuracy number kya tha — 85%? 92%?"
+  (This is CASE D. After link declined, NOW ask for specific number.)
+
+Example 3 — follow-up: student gives link, GitHub repo data is included in context:
+  pending_project before: same as above
+  Input: "https://github.com/aditya/sales-pred"
+  Context has GitHub repo data: { description: "Sales prediction model with 91.2% test accuracy using XGBoost", languages: ["Python","Jupyter"] }
+  Your output:
+    project: { github_url: "https://github.com/aditya/sales-pred", bullets: ["Built sales prediction model with **91.2% test accuracy** using XGBoost"] }
+    link_declined: false
+    clarification_needed: null
+  (CASE E. README provided the metric; bullets enriched. All four ✓.)
+
+ROLE-NATIVE METRICS for CASE D — adapt to TARGET ROLE in JD context:
+- Marketing: reach, CTR, conversions, leads, pipeline.
+- Engineering: latency, scale (RPS/users), uptime, bug count reduced.
+- Design: users affected, adoption %, conversion lift, A/B test result.
+- Sales: revenue, deals, quota %.
+- Civil/Mech: budget, sq ft, timeline saved, safety/quality outcome.
+- Medical/Teaching: people served, outcome improved, program scaled.
+- Other domains: pick a metric native to that field. Never default to software metrics.`,
+    shape: '{ "project": { "name": string | null, "tech_stack": [string], "dates": string | null, "github_url": string | null, "bullets": [string] } | null, "link_declined": boolean, "clarification_needed": string | null }',
     // Merge into pending_project (not projects[]). Router decides when to commit.
     merge: (rj, x) => {
       if (!rj.pending_project) rj.pending_project = {};
-      if (!x.project) return;
       const p = rj.pending_project;
+      // Persist link-decline flag across turns.
+      if (x.link_declined === true) p._link_declined = true;
+      if (!x.project) return;
       for (const k of ['name', 'dates', 'github_url']) {
         if (x.project[k]) p[k] = x.project[k];
       }
@@ -165,18 +233,27 @@ Same role-tailoring for "missing contribution" and "missing description". NEVER 
     },
   },
 
-  // CERTS — drastically simplified per Meet's feedback. Just name + URL.
-  // Day 4 template renders as hyperlink (name = display text, url = href).
-  // Don't ask for issuer or date — they're inferable from URL or irrelevant.
+  // CERTS — name + URL. Day 4 template renders as hyperlink.
+  // Verification URL is genuinely required so the cert isn't a dangling unverifiable claim;
+  // student can explicitly say "no link" to bypass.
   AWAITING_CERTS: {
-    instruction: `Extract certifications. Each entry needs ONLY a name and a verification URL.
+    instruction: `Extract certifications. Each entry needs a name AND a verification URL (or an explicit "no link" from the student).
 
 Rules:
-- name = course/cert title (e.g., "Deep Learning Specialization", "AWS Certified Solutions Architect").
-- url = the verification URL the student shared (Coursera/NPTEL/Udemy/AWS Credly/etc.). If they only gave a name and no link, url = null.
-- Return an ARRAY — could be one or many from one message.
+- name = course/cert title (e.g., "Deep Learning Specialization", "NPTEL Data Analytics with Python", "AWS Certified Solutions Architect")
+- url = the verification URL (Coursera / NPTEL / Udemy / Credly / AWS / etc.). If the student didn't share one, url = null.
+- Return an ARRAY — one or many from a single message.
 - Do NOT extract or invent issuer/date as separate fields. The URL contains that info implicitly; the rendered resume will be a hyperlink (name as visible text, url as link).
-- clarification_needed = null unless name itself is unclear.`,
+
+Sufficiency check:
+- If EVERY cert in the new message has either a url OR the student explicitly said "no link"/"skip link"/"private" → clarification_needed = null.
+- If ANY cert is missing a url and the student didn't bypass → set clarification_needed to a SHORT Hinglish/English follow-up asking ONLY for the link(s).
+
+Example clarifications (adapt — don't copy verbatim):
+- "Verification link bhej dijiye '<cert name>' ke liye? Coursera / NPTEL / Credly wala URL. 'no link' agar nahi hai."
+- "Got the cert name — share the verification URL too? (Coursera / NPTEL / etc.) Or 'no link' if unavailable."
+
+If "no link" / "skip" / "private" arrives in response, accept the cert(s) with url=null and clarification_needed=null.`,
     shape: '{ "certifications": [{ "name": string, "url": string | null }], "clarification_needed": string | null }',
     merge: (rj, x) => {
       if (!rj.certifications) rj.certifications = [];
