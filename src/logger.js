@@ -15,8 +15,15 @@ const logger = pino({
       'req.headers["x-razorpay-signature"]',
       'req.body.AuthToken',
       'req.body.From',
+      'req.body.To',
       'req.body.WaId',
       'req.body.ProfileName',
+      // Session carries the raw WhatsApp address (phone_from) for outbound
+      // post-payment delivery. We never log the session wholesale, but redact
+      // defensively so a stray log line can never leak the number.
+      '*.phone_from',
+      '*.phoneFrom',
+      'phone_from',
       '*.apiKey',
       '*.api_key',
       '*.secret',

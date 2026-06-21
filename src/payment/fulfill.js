@@ -10,11 +10,20 @@ const logger = require('../logger');
 
 const PAID_MESSAGE = 'Payment received ✓ Yeh raha aapka clean, ATS-readable resume — ab Naukri/LinkedIn sab isse properly parse karenge. All the best! 🎉';
 
-// Returns { ok, ... }. Never throws for "expected" terminal cases (missing
-// hash, expired session) — those are logged and acked so Razorpay stops
-// retrying. Re-throws only on unexpected errors so the route returns 5xx and
-// Razorpay retries (the dedupe lock is released first so the retry can run).
-async function fulfillPayment({ phoneHash, paymentId, linkId }) {
+// Returns { ok, ... } for terminal cases that a retry can't help (missing
+// hash/paymentId, expired session, no delivery address) — these are acked so
+// Razorpay stops retrying. Throws on any DELIVERY failure (PDF gen or outbound
+// send): the dedupe lock is released first, so the route returns 5xx and
+// Razorpay's retry re-runs fulfilment and re-attempts delivery.
+//
+// Ordering invariant: payment truth (`paid=true`) is persisted BEFORE any
+// delivery work, so no delivery failure can ever roll a settled payment back.
+// `state=PAID_COMPLETE` is set only AFTER the PDF is actually delivered, so a
+// student whose delivery is still being retried isn't told "already sent".
+// `deps.send` is injectable so tests can exercise delivery/failure paths
+// without hitting Twilio; production calls pass nothing and use the real sender.
+async function fulfillPayment({ phoneHash, paymentId, linkId }, deps = {}) {
+  const send = deps.send || sendWhatsApp;
   if (!phoneHash) {
     logger.warn({ paymentId }, 'fulfillPayment: no phone_hash in notes');
     return { ok: false, reason: 'no_phone_hash' };
@@ -40,37 +49,39 @@ async function fulfillPayment({ phoneHash, paymentId, linkId }) {
       return { ok: false, reason: 'session_expired' };
     }
 
+    // Point of no return: record the payment BEFORE attempting delivery so a
+    // later failure can never undo it.
     session.paid = true;
     session.razorpay_payment_id = paymentId;
     session.razorpay_payment_link_id = linkId || session.razorpay_payment_link_id;
-
-    const delivery = await deliverPdf(session, phoneHash, { clean: true });
-    session.state = STATES.PAID_COMPLETE;
     await setSession(phoneHash, session);
 
-    if (!delivery || !delivery.signedUrl) {
-      logger.error({ phoneHash: String(phoneHash).slice(0, 12), paymentId }, 'clean PDF generation failed post-payment');
-      return { ok: true, sent: false, reason: 'clean_pdf_failed' };
-    }
-
     if (!session.phone_from) {
-      logger.warn({ phoneHash: String(phoneHash).slice(0, 12) }, 'no phone_from on session; clean PDF generated but not pushed');
+      // No address to deliver to; a retry won't help until the student messages
+      // the bot again (which re-captures phone_from). Terminal — ack. Payment
+      // stands; the clean PDF will be generated on their next interaction.
+      logger.warn({ phoneHash: String(phoneHash).slice(0, 12) }, 'no phone_from on session; payment settled, delivery deferred');
       return { ok: true, sent: false, reason: 'no_phone_from' };
     }
 
-    // Payment is already settled and the clean PDF stored. If the outbound push
-    // fails (e.g. recipient never joined the sandbox), do NOT roll back — log
-    // and ack. The student can re-fetch via the bot (state is PAID_COMPLETE).
-    try {
-      await sendWhatsApp({ to: session.phone_from, body: PAID_MESSAGE, mediaUrl: delivery.signedUrl });
-      return { ok: true, sent: true };
-    } catch (sendErr) {
-      logger.error({ err: sendErr.message, phoneHash: String(phoneHash).slice(0, 12) }, 'clean PDF push failed (payment still settled)');
-      return { ok: true, sent: false, reason: 'send_failed' };
+    // Delivery. Any failure here throws → outer catch releases the dedupe lock
+    // → route 5xx → Razorpay retries → delivery re-attempted. Payment already
+    // persisted above, so it is never rolled back.
+    const delivery = await deliverPdf(session, phoneHash, { clean: true });
+    if (!delivery || !delivery.signedUrl) {
+      throw new Error('clean PDF generation failed post-payment');
     }
+    await send({ to: session.phone_from, body: PAID_MESSAGE, mediaUrl: delivery.signedUrl });
+
+    // Delivered — only now mark the conversation complete.
+    session.state = STATES.PAID_COMPLETE;
+    await setSession(phoneHash, session);
+    return { ok: true, sent: true };
   } catch (e) {
-    // Unexpected failure — release the lock so Razorpay's retry re-attempts.
+    // Delivery failure — release the lock so Razorpay's retry re-attempts.
+    // Payment state was already persisted and is intentionally NOT rolled back.
     await unmarkPaymentProcessed(paymentId);
+    logger.error({ err: e.message, phoneHash: String(phoneHash).slice(0, 12), paymentId }, 'delivery failed; lock released for retry (payment settled)');
     throw e;
   }
 }
