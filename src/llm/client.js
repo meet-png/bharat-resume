@@ -36,11 +36,12 @@ async function complete({ system, user, model = config.LLM_PRIMARY, temperature 
       // abort — retrying a 401/429/404 just burns another call on the same failure.
       // "Connection error." (no status/code) means the request never reached
       // OpenAI — a network/DNS/egress failure. The real errno (ETIMEDOUT /
-      // EAI_AGAIN / ECONNREFUSED) hides in e.cause; surface it so a transient
-      // blip is distinguishable from a hard egress/IPv6 problem.
+      // EAI_AGAIN / ECONNREFUSED) lives in e.cause.code. NEVER log e.cause.message
+      // here: on some undici failures it embeds the outgoing request's
+      // Authorization header (the API key) — logging it leaks the secret.
       const cause = e.cause || {};
       logger.error(
-        { status: e.status, code: e.code, type: e.type, causeCode: cause.code, causeMsg: cause.message, err: e.message, model },
+        { status: e.status, code: e.code, type: e.type, causeCode: cause.code, err: e.message, model },
         'openai request failed',
       );
       throw e;
