@@ -20,16 +20,25 @@ const logger = require('../logger');
 const router = express.Router();
 
 // GET verify-challenge. Meta calls this once when you save the callback URL.
+// Tokens are trimmed before comparison: pasting a value into a hosting panel
+// (Railway etc.) very often appends a stray space/newline, and "x" !== "x\n"
+// would 403 a token that is otherwise correct.
 router.get('/', (req, res) => {
   const mode = req.query['hub.mode'];
-  const token = req.query['hub.verify_token'];
+  const token = String(req.query['hub.verify_token'] || '').trim();
   const challenge = req.query['hub.challenge'];
+  const expected = String(config.META_VERIFY_TOKEN || '').trim();
 
-  if (mode === 'subscribe' && token && config.META_VERIFY_TOKEN && token === config.META_VERIFY_TOKEN) {
+  if (mode === 'subscribe' && token && expected && token === expected) {
     req.log.info('meta webhook verified');
     return res.status(200).send(challenge);
   }
-  req.log.warn({ mode, tokenMatch: token === config.META_VERIFY_TOKEN }, 'meta webhook verify failed');
+  // Log lengths (never the secret values) so a stray-whitespace or unset-var
+  // mismatch is diagnosable from the logs alone.
+  req.log.warn(
+    { mode, expectedSet: !!expected, expectedLen: expected.length, reqLen: token.length },
+    'meta webhook verify failed',
+  );
   return res.sendStatus(403);
 });
 
