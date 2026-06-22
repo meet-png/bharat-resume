@@ -172,10 +172,14 @@ function buildPreview(session) {
   }
 
   // Matched-skill COUNT (not full list). 3-token tease is enough signal
-  // without giving a usable skill section.
+  // without giving a usable skill section. ONLY shown when a REAL JD exists —
+  // pasted JD text or a scraped JD URL (both land in session.jd_text). A bare
+  // role title makes keywords.js *infer* keywords, which is not a real JD match,
+  // so we must never present that inferred count as a "JD match".
+  const hasRealJd = !!session.jd_text;
   const matched = keywordsMatched(r, session.jd_keywords);
   const jdN = Array.isArray(session.jd_keywords) ? session.jd_keywords.length : 0;
-  if (matched.length > 0 && jdN > 0) {
+  if (hasRealJd && matched.length > 0 && jdN > 0) {
     const tease = matched.slice(0, 3).join(', ') + (matched.length > 3 ? ', …' : '');
     lines.push(`*JD match:* ${matched.length}/${jdN} keywords (${tease})`);
   }

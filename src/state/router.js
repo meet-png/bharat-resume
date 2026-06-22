@@ -1,6 +1,6 @@
 // State machine. PRD §6, §18 Day 2-3.
 const { STATES, NEXT_STATE, OPTIONAL_STATES, PHASE_2_STATES } = require('./states');
-const { pickPrompt, pickMessage } = require('./prompts');
+const { pickPrompt, pickMessage, expSlotQuestion } = require('./prompts');
 const { extractSection, SECTION_CONFIG } = require('../llm/extract');
 const { runGeneration, buildPreview } = require('./generator');
 const { deliverPdf } = require('./delivery');
@@ -34,6 +34,21 @@ const EDIT_RE = /^\s*(edit|edits|change|changes)\s*$/i;
 // post-payment (clean PDF). Communicated to the student at every boundary.
 const MAX_FREE_EDITS = 3;
 const MAX_PAID_EDITS = 3;
+
+// Experience: the three hard slots every entry needs. Asked deterministically
+// (one question, only the empty ones) so a filled slot is never re-asked.
+const EXP_HARD_SLOTS = ['role', 'company', 'dates'];
+// Once these are filled, a clarification that still mentions them is the LLM
+// wrongly re-asking — we detect it and substitute a deterministic impact ask.
+const EXP_SLOT_REASK_RE = /\b(role|designation|company|organi[sz]ation|kaha|kahaan|where.*work|kab se|kab tak|duration|dates|kitne se kitne|naam kya|name of)\b/i;
+// Bullet safety cap: if we already have this many bullets, advance regardless of
+// the LLM's sufficiency clarification so the step can never loop forever.
+const EXP_BULLET_CAP = 3;
+
+function experienceHardMissing(exp) {
+  if (!exp) return [...EXP_HARD_SLOTS];
+  return EXP_HARD_SLOTS.filter((k) => !exp[k]);
+}
 
 function classifyJdInput(text) {
   const t = String(text || '').trim();
@@ -76,13 +91,18 @@ async function tryGenerate(session, phoneFrom, phoneHash) {
   try {
     await runGeneration(session, phoneFrom);
     const delivery = await deliverPdf(session, phoneHash, { clean: unlocked(session) });
+    // Delivery is checked BEFORE composing the response. If the PDF didn't
+    // render/upload, we must NOT advance to DELIVERED or emit the success
+    // preview (ATS score, "tayar", checkmarks) — that would claim a resume the
+    // student can't open. Hold in GENERATING so the next message retries, and
+    // return a clean, user-safe failure message (never "check server logs").
+    if (!delivery || !delivery.signedUrl) {
+      logger.error({ phoneHash: String(phoneHash).slice(0, 12) }, 'pdf delivery failed; holding in GENERATING for retry');
+      return pickMessage('pdfDeliveryFailed');
+    }
     session.state = STATES.DELIVERED;
     logEvent({ phoneHash, eventName: 'resume_delivered', state: STATES.DELIVERED, payload: { ats_score: session.ats_score } });
-    const text = buildPreview(session);
-    if (delivery && delivery.signedUrl) {
-      return { text, media: delivery.signedUrl };
-    }
-    return text + '\n\n(PDF delivery failed — preview only. Check server logs.)';
+    return { text: buildPreview(session), media: delivery.signedUrl };
   } catch (e) {
     logger.error({ err: e.message, stack: e.stack }, 'generation pipeline failed');
     return pickMessage('generationFailed');
@@ -175,8 +195,17 @@ async function runEdit(session, phoneHash, instruction) {
   rescore(session);
   const delivery = await deliverPdf(session, phoneHash, { clean: paid });
 
-  // A real change was applied — consume one edit (even if PDF re-delivery
-  // hiccups; the change is saved on the session).
+  // Check delivery BEFORE claiming success. If the re-render failed, do NOT
+  // consume an edit and do NOT send the "Updated ✓" template. The change is
+  // saved on the session, so retrying 'edit' will re-deliver it. Return to the
+  // resting state with a clear, user-safe failure message.
+  if (!delivery || !delivery.signedUrl) {
+    logger.error({ phoneHash: String(phoneHash).slice(0, 12) }, 'edit pdf delivery failed; edit not consumed');
+    session.state = paid ? STATES.PAID_COMPLETE : STATES.DELIVERED;
+    return pickMessage('editPdfFailed');
+  }
+
+  // A real change was applied AND delivered — consume one edit.
   if (paid) session.edits_paid_used = used + 1;
   else session.edits_free_used = used + 1;
   const remaining = max - (used + 1);
@@ -185,11 +214,7 @@ async function runEdit(session, phoneHash, instruction) {
   // Back to the resting state — the next 'edit'/'pay' is a command again.
   session.state = paid ? STATES.PAID_COMPLETE : STATES.DELIVERED;
 
-  const text = pickMessage(paid ? 'editAppliedPaid' : 'editApplied', { remaining });
-  if (delivery && delivery.signedUrl) {
-    return { text, media: delivery.signedUrl };
-  }
-  return text + '\n\n(PDF delivery failed — change saved. Try again in a moment.)';
+  return { text: pickMessage(paid ? 'editAppliedPaid' : 'editApplied', { remaining }), media: delivery.signedUrl };
 }
 
 // Public entry. Serializes a single student's messages with a per-phone lock so
@@ -336,7 +361,7 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
       session.jd_generic = true;
       session.state = NEXT_STATE[current];
       await setSession(phoneHash, session);
-      return pickMessage('jdGenericAck') + '\n\n' + pickPrompt(session.state);
+      return pickMessage('jdGenericAck') + '\n\n' + pickPrompt(session.state, session);
     }
     const kind = classifyJdInput(trimmed);
     if (kind === 'url')       { session.jd_url = trimmed; session.jd_text = null; session.jd_role = null; }
@@ -346,7 +371,7 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
     session.state = NEXT_STATE[current];
     await setSession(phoneHash, session);
     const ack = kind === 'role' ? pickMessage('jdRoleAck', { role: trimmed }) + '\n\n' : '';
-    return ack + pickPrompt(session.state);
+    return ack + pickPrompt(session.state, session);
   }
 
   // --- AWAITING_POR: pending_por accumulator (similar to projects). ---
@@ -362,7 +387,7 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
       session.resume_json.pending_por = null;
       session.state = NEXT_STATE[current];
       await setSession(phoneHash, session);
-      return (await tryGenerate(session, phoneFrom, phoneHash)) || pickPrompt(session.state);
+      return (await tryGenerate(session, phoneFrom, phoneHash)) || pickPrompt(session.state, session);
     }
     try {
       const { data, usage } = await extractSection({ state: current, body: trimmed, resumeJson: session.resume_json, session });
@@ -380,7 +405,7 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
       session.resume_json.pending_por = null;
       session.state = NEXT_STATE[current];
       await setSession(phoneHash, session);
-      return (await tryGenerate(session, phoneFrom, phoneHash)) || pickPrompt(session.state);
+      return (await tryGenerate(session, phoneFrom, phoneHash)) || pickPrompt(session.state, session);
     } catch (e) {
       // A throw here is a BACKEND failure (LLM call errored or returned
       // unparseable JSON), never a "bad user input" — that path returns the
@@ -404,7 +429,7 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
       session.resume_json.pending_project = null;
       session.state = NEXT_STATE[current];
       await setSession(phoneHash, session);
-      return pickPrompt(session.state);
+      return pickPrompt(session.state, session);
     }
     try {
       const { data, usage, repoEnrichment } = await extractSection({ state: current, body: trimmed, resumeJson: session.resume_json, session });
@@ -431,6 +456,70 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
     }
   }
 
+  // --- AWAITING_EXPERIENCE: dedicated handler to prevent re-asking filled slots. ---
+  // The extractor already parses each message against ALL fields (role, company,
+  // dates, bullets, tech_stack), and merge() accumulates across turns. The bug
+  // was the LLM's free-form clarification re-asking a slot that's already filled.
+  // Fix: drive hard-slot questions DETERMINISTICALLY (ask only what's empty), and
+  // only defer to the LLM for bullet/impact depth — guarding against any
+  // clarification that re-mentions a filled hard slot.
+  if (current === STATES.AWAITING_EXPERIENCE) {
+    if (SKIP_RE.test(trimmed)) {
+      session.state = NEXT_STATE[current];
+      const genReply = await tryGenerate(session, phoneFrom, phoneHash);
+      await setSession(phoneHash, session);
+      return genReply || pickPrompt(session.state, session);
+    }
+    let data, usage;
+    try {
+      // Pass the slot we asked for last turn so a terse reply ("Jan 2023 to Dec
+      // 2024") gets mapped to it instead of being dropped as context-less.
+      ({ data, usage } = await extractSection({ state: current, body: trimmed, resumeJson: session.resume_json, session, focus: session.exp_focus || null }));
+    } catch (e) {
+      logger.error({ err: e.message, status: e.status, code: e.code, state: current, bodyLen: trimmed.length }, 'extract failed');
+      return pickMessage('serverError');
+    }
+    logger.info({ phoneHash: phoneShort, state: current, usage }, 'extracted');
+    SECTION_CONFIG[current].merge(session.resume_json, data);
+
+    const exp = (session.resume_json.experience && session.resume_json.experience[0]) || null;
+    const missing = experienceHardMissing(exp);
+
+    // 1. Hard slots still empty → ask ONLY for those, deterministically. Never
+    //    re-asks a slot already filled, never relies on the LLM here. Remember
+    //    which slot we're asking for so next turn's extraction can map a terse
+    //    reply straight to it.
+    if (missing.length > 0) {
+      session.exp_focus = missing[0];
+      await setSession(phoneHash, session);
+      return expSlotQuestion(missing);
+    }
+    session.exp_focus = null;
+
+    // 2. All hard slots present → use the LLM's clarification for bullet/impact
+    //    depth, but guard it. If it re-asks a filled slot, log and substitute a
+    //    deterministic impact ask instead of repeating the question.
+    const bulletCount = (exp.bullets || []).length;
+    if (data.clarification_needed && bulletCount < EXP_BULLET_CAP) {
+      if (EXP_SLOT_REASK_RE.test(data.clarification_needed)) {
+        logger.warn(
+          { phoneHash: phoneShort, state: current, clar: data.clarification_needed.slice(0, 60) },
+          'LLM re-asked a filled experience slot; substituting impact ask',
+        );
+        await setSession(phoneHash, session);
+        return pickMessage('expAskImpact');
+      }
+      await setSession(phoneHash, session);
+      return data.clarification_needed;
+    }
+
+    // 3. Sufficient (or bullet safety cap hit) → advance + generate.
+    session.state = NEXT_STATE[current];
+    const genReply = await tryGenerate(session, phoneFrom, phoneHash);
+    await setSession(phoneHash, session);
+    return genReply || pickPrompt(session.state, session);
+  }
+
   // --- General Phase 2 collection. ---
   if (PHASE_2_STATES.has(current)) {
     const optional = OPTIONAL_STATES.has(current);
@@ -438,7 +527,7 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
       session.state = NEXT_STATE[current];
       const genReply = await tryGenerate(session, phoneFrom, phoneHash);
       await setSession(phoneHash, session);
-      return genReply || pickPrompt(session.state);
+      return genReply || pickPrompt(session.state, session);
     }
     try {
       const { data, usage } = await extractSection({ state: current, body: trimmed, resumeJson: session.resume_json, session });
@@ -451,7 +540,7 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
       session.state = NEXT_STATE[current];
       const genReply = await tryGenerate(session, phoneFrom, phoneHash);
       await setSession(phoneHash, session);
-      return genReply || pickPrompt(session.state);
+      return genReply || pickPrompt(session.state, session);
     } catch (e) {
       // A throw here is a BACKEND failure (LLM call errored or returned
       // unparseable JSON), never a "bad user input" — that path returns the

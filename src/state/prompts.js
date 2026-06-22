@@ -72,12 +72,23 @@ const PROMPTS = {
     "Target job — drop the Naukri link, paste JD text, OR just the role title (e.g., 'Frontend Engineer'). Say 'no specific role' for a role-agnostic resume.",
   ],
 
-  [STATES.AWAITING_SKILLS]: [
-    "Kaun kaun si skills aati hain? Programming languages, frameworks, tools — casually likh dijiye.",
-    "List your skills — programming languages, frameworks, tools, libraries, anything relevant.",
-    "Skills batayiye: languages, libraries, tools, databases — jo bhi aata hai sab.",
-    "What skills do you have? Languages, frameworks, tools — drop them all in one message.",
-  ],
+  // Role-aware (keyed by domain — see roleDomain()). Technical roles get the
+  // languages/frameworks phrasing; everyone else gets a generic, non-coding ask
+  // so a Marketing Manager isn't asked for "programming languages".
+  [STATES.AWAITING_SKILLS]: {
+    technical: [
+      "Kaun kaun si skills aati hain? Programming languages, frameworks, tools — casually likh dijiye.",
+      "List your skills — programming languages, frameworks, tools, libraries, anything relevant.",
+      "Skills batayiye: languages, libraries, tools, databases — jo bhi aata hai sab.",
+      "What skills do you have? Languages, frameworks, tools — drop them all in one message.",
+    ],
+    general: [
+      "Kaun kaun si skills aati hain? Tools, software, aur methods jo aap kaam mein use karte ho — sab casually likh dijiye.",
+      "List your key skills — tools, software, techniques, anything relevant to your work.",
+      "Apni skills batayiye: jo bhi tools, software ya methods aate hain — sab ek message mein.",
+      "What are your main skills? Tools, software, methods you use — drop them all in one message.",
+    ],
+  },
 
   [STATES.AWAITING_COURSEWORK]: [
     "Koi relevant coursework hai jo highlight karna chahte ho? Jaise DSA, ML, Stats, DBMS, etc. 'skip' if none.",
@@ -95,13 +106,23 @@ const PROMPTS = {
     "Internships/jobs share kariye — kahaan, kya role, kya banaya/improve kiya, kya result mila. 'skip' agar nahi hai.",
   ],
 
-  // Projects prompt asks for description + LINK so we can auto-enrich from GitHub.
-  [STATES.AWAITING_PROJECTS]: [
-    "Projects share kariye — ek project per message. Name + GitHub link + 2-3 lines kya banaya. Multiple projects ho to ek-ek karke. 'done' jab sab bata den, 'skip' if none.",
-    "Tell me about your projects — one per message. Name, the GitHub link (or live URL), and a short description. Type 'done' when finished, 'skip' if none.",
-    "Koi projects? Har project alag message: name, GitHub link, brief description. 'done' for finish, 'skip' for none. GitHub link ho to bhej dena — main repo se details pick kar lunga.",
-    "Projects batao — one at a time. Include name + GitHub link + what it does. I'll pull tech stack and details from the repo. Type 'done' when complete, 'skip' if nothing.",
-  ],
+  // Role-aware. Technical roles get the GitHub-centric ask (we auto-enrich from
+  // the repo); non-technical roles get a link-agnostic ask so a Marketing /
+  // Sales / Finance candidate isn't told to paste a GitHub link.
+  [STATES.AWAITING_PROJECTS]: {
+    technical: [
+      "Projects share kariye — ek project per message. Name + GitHub link + 2-3 lines kya banaya. Multiple projects ho to ek-ek karke. 'done' jab sab bata den, 'skip' if none.",
+      "Tell me about your projects — one per message. Name, the GitHub link (or live URL), and a short description. Type 'done' when finished, 'skip' if none.",
+      "Koi projects? Har project alag message: name, GitHub link, brief description. 'done' for finish, 'skip' for none. GitHub link ho to bhej dena — main repo se details pick kar lunga.",
+      "Projects batao — one at a time. Include name + GitHub link + what it does. I'll pull tech stack and details from the repo. Type 'done' when complete, 'skip' if nothing.",
+    ],
+    general: [
+      "Projects ya major kaam share kariye — ek per message. Naam + 2-3 lines kya kiya/banaya. 'done' jab sab ho jaye, 'skip' if none.",
+      "Tell me about your projects or key work — one per message. Name + a short description of what you did. Type 'done' when finished, 'skip' if none.",
+      "Koi projects, campaigns ya initiatives? Har ek alag message: naam + brief description. 'done' for finish, 'skip' for none.",
+      "Projects ya key work batao — one at a time. Name + what it achieved. Agar kuch public hai (live site / article / deck) to link bhi bhej dena. 'done' when complete, 'skip' if nothing.",
+    ],
+  },
 
   // PoR step: jargon dropped, plain language used per Meet's feedback.
   [STATES.AWAITING_POR]: [
@@ -286,6 +307,30 @@ const MESSAGES = {
     "Hmm, that edit didn't go through. One more time, or 'done' to keep current.",
   ],
 
+  // PDF render/upload failed during initial generation. NO success preview, NO
+  // "check server logs" — just a clear, retryable failure message. The state
+  // machine stays in GENERATING so the next inbound message retries.
+  pdfDeliveryFailed: [
+    "PDF banane mein dikkat aa gayi 😕 Thoda ruk ke koi bhi message bhejiye — main dobara try karunga.",
+    "Resume PDF abhi generate nahi ho payi. 30s baad ek message aur bhejiye, main turant retry karunga.",
+    "Oops — PDF deliver nahi ho payi. Koi message bhejiye aur main phir se bana ke bhejta hu.",
+  ],
+
+  // Edit applied to the data but the re-render failed. Change is saved on the
+  // session; no edit consumed; student can retry 'edit'.
+  editPdfFailed: [
+    "Change save ho gaya, par naya PDF abhi nahi ban paya. Thodi der mein 'edit' phir bhejiye — wahi change dobara apply ho jayega.",
+    "Aapka edit set hai, lekin PDF re-generate nahi hui. Thoda ruk ke 'edit' dobara try kariye.",
+  ],
+
+  // Deterministic impact ask for the experience step — used when the LLM tries
+  // to re-ask an already-filled hard slot (role/company/dates).
+  expAskImpact: [
+    "Aur ek baat — is kaam ka impact kya raha? Koi number ya result (jaise % improve, reach, time saved)?",
+    "Thoda impact bata dijiye — kya result/outcome mila? Koi specific number ho to best.",
+    "Last bit: is experience ka concrete result kya tha — number ya measurable outcome?",
+  ],
+
   beyondPhase2: [
     "Day 2 yahin tak hai. Rewrite + PDF + ATS scoring Day 3+ mein. Use 'show me' to view data, 'reset' to restart.",
     "We're at the edge of Day 2 build. Try 'show me' to view collected data, or 'reset' to start over.",
@@ -298,10 +343,43 @@ function pick(arr) {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
-function pickPrompt(state) {
+// Coarse technical-vs-general split used to pick role-aware prompts (skills,
+// projects). Deliberately an allow-list of clearly technical roles — anything
+// not matched falls back to 'general', because generic phrasing reads fine for
+// a developer too, whereas tech phrasing alienates a non-technical candidate.
+const TECHNICAL_ROLE_RE = /\b(software|developer|dev|programmer|coder|engineer|engineering|data scien|data analyst|data engineer|machine learning|\bml\b|\bai\b|deep learning|devops|\bsre\b|backend|back-end|frontend|front-end|full.?stack|web dev|mobile dev|android|ios|\bqa\b|sdet|test engineer|automation engineer|cloud|security engineer|cyber|\bdba\b|database admin|embedded|firmware|systems? engineer|game dev|blockchain|programming)\b/i;
+
+function roleDomain(session) {
+  if (!session) return 'general';
+  const hay = [session.jd_role, session.jd_text].filter(Boolean).join(' ');
+  if (hay && TECHNICAL_ROLE_RE.test(hay)) return 'technical';
+  return 'general';
+}
+
+function pickPrompt(state, session) {
   const p = PROMPTS[state];
   if (!p) return null;
-  return pick(p);
+  if (Array.isArray(p)) return pick(p);
+  // Role-aware prompt: object keyed by domain ('technical' | 'general').
+  const domain = roleDomain(session);
+  return pick(p[domain] || p.general || p.technical);
+}
+
+// Deterministic, slot-scoped question for the experience step. Asks ONLY for the
+// hard slots still empty (role/company/dates) so a filled slot is never re-asked.
+function expSlotQuestion(missing) {
+  const labels = {
+    role: 'aapka role / designation',
+    company: 'company ka naam',
+    dates: 'duration (kab se kab tak)',
+  };
+  const parts = (missing || []).map((k) => labels[k] || k);
+  if (parts.length === 0) return null;
+  let ask;
+  if (parts.length === 1) ask = parts[0];
+  else if (parts.length === 2) ask = parts[0] + ' aur ' + parts[1];
+  else ask = parts.slice(0, -1).join(', ') + ' aur ' + parts[parts.length - 1];
+  return `Bas itna aur batayiye — ${ask}?`;
 }
 
 function pickMessage(key, vars = {}) {
@@ -314,4 +392,4 @@ function pickMessage(key, vars = {}) {
   return s;
 }
 
-module.exports = { PROMPTS, MESSAGES, pickPrompt, pickMessage };
+module.exports = { PROMPTS, MESSAGES, pickPrompt, pickMessage, roleDomain, expSlotQuestion };

@@ -83,7 +83,10 @@ ONLY set name=null and ask a clarification if the input is clearly NOT a name: a
 - databases: data stores (mostly relevant for tech/data roles; empty otherwise)
 - other: anything else relevant — domain expertise, certifications mentioned, soft skills, regulatory knowledge, methodologies
 
-Include EVERY skill the student mentioned. When ambiguous about which bucket, prefer "tools" or "other" — never drop a skill, and never force a non-tech skill into a tech bucket. Preserve student's capitalization where reasonable. Empty array if a category genuinely has nothing.`,
+Include EVERY skill the student mentioned. When ambiguous about which bucket, prefer "tools" or "other" — never drop a skill, and never force a non-tech skill into a tech bucket. Preserve student's capitalization where reasonable. Empty array if a category genuinely has nothing.
+
+THIS IS A SIMPLE LIST STEP — DO NOT INTERROGATE.
+Set clarification_needed to null whenever the message contains AT LEAST ONE skill (it almost always does). A short list IS complete and sufficient. NEVER ask for metrics, impact, proficiency levels, years of experience, examples, or "more" skills — that judgement happens later in the experience/projects steps, never here. Only set clarification_needed (a brief, friendly ask for their skills) if the message contains NO skills at all — e.g. it is empty, "skip", a question, or gibberish.`,
     shape: '{ "skills": { "languages": [string], "frameworks": [string], "tools": [string], "databases": [string], "other": [string] }, "clarification_needed": string | null }',
     merge: (rj, x) => { rj.skills = x.skills || { languages: [], frameworks: [], tools: [], databases: [], other: [] }; },
   },
@@ -189,10 +192,13 @@ CASE B — (a) present, (b) missing:
   Ask for tech / description. Example: "Kis tech / tool se banaya? Aur kya karta hai project?"
 
 CASE C — (a) and (b) present, (d) missing AND _link_declined NOT true:
-  Ask ONLY for the link. NEVER mention impact/accuracy/metric here.
-  Examples:
-    "GitHub link bhej dijiye? Ya deployed URL / demo? 'no link' agar private hai."
-    "Repo link ya live URL? 'no link' agar nahi share kar sakte."
+  Ask ONLY for a link to the work. NEVER mention impact/accuracy/metric here.
+  Pick the artifact NATIVE to the TARGET ROLE — do NOT default to GitHub for non-technical roles:
+    - Technical role: "GitHub repo link ya deployed URL? 'no link' agar private hai."
+    - Marketing/Content: "Is kaam ka koi link hai — live campaign, published article, ya post? 'no link' agar nahi."
+    - Design: "Portfolio / Behance / Dribbble ya live link? 'no link' agar private hai."
+    - Sales/Finance/Ops/other: "Koi link ya proof of this work — live page, report, ya deck? 'no link' agar share nahi kar sakte."
+  Only mention GitHub/repo when the TARGET ROLE is clearly technical (software, data, engineering). Otherwise ask for a generic link/proof.
 
 CASE D — link sorted AND <2 bullets OR <2 distinct angles in existing bullets:
   Identify which angle is missing from the existing bullets. Ask ONE targeted question for THAT angle.
@@ -419,7 +425,7 @@ function buildJdContext(session) {
   return '';
 }
 
-async function extractSection({ state, body, resumeJson, session }) {
+async function extractSection({ state, body, resumeJson, session, focus }) {
   const cfg = SECTION_CONFIG[state];
   if (!cfg) throw new Error(`No extractor configured for state ${state}`);
 
@@ -440,10 +446,19 @@ async function extractSection({ state, body, resumeJson, session }) {
 
   const jdContextBlock = buildJdContext(session);
 
+  // Conversational context: WHAT the student was just asked. Without this the
+  // extraction is stateless — a terse reply like "Jan 2023 to Dec 2024" or
+  // "Razorpay" carries no clue which field it answers, so the LLM drops it and
+  // the router re-asks. This line gives the LLM the same context a human chat
+  // would have: "you just asked X, so this reply IS X."
+  const focusBlock = focus
+    ? `\n\nCONVERSATION CONTEXT: The student was JUST asked specifically for the "${focus}" of their experience. Their message below is almost certainly the answer to THAT — map it to "${focus}" even if stated tersely or as a bare fragment (a bare date range → dates; a bare company name → company; a bare job title → role). Fill that field; do not discard a short reply just because it isn't a full sentence.`
+    : '';
+
   const system = `You are extracting structured resume data from a student's WhatsApp message. The student types in English, Hinglish (Roman-script Hindi), or sometimes pure Hindi. Extract ONLY what they explicitly stated or what's verifiable from GitHub repo data when provided. Do not invent metrics, claims, or skills.
 
 Current state: ${state}
-Current resume_json (already collected; for context only): ${JSON.stringify(resumeJson)}${jdContextBlock}${enrichmentBlock}
+Current resume_json (already collected; for context only): ${JSON.stringify(resumeJson)}${jdContextBlock}${focusBlock}${enrichmentBlock}
 
 INSTRUCTION: ${cfg.instruction}
 
