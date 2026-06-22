@@ -56,6 +56,12 @@ const schema = z.object({
   // random value in production. Optional so dev still boots; a missing value in
   // production is warned about loudly below.
   PHONE_HASH_SECRET: z.preprocess(emptyAsUndefined, z.string().min(16).optional()),
+
+  // Max concurrent PDF render+watermark pipelines per process. Each one spins a
+  // Chromium page and rasterizes A4 at 3x (multi-MB buffers), so an unbounded
+  // burst of inbound messages can OOM a small container. Renders past this cap
+  // queue instead of running in parallel. Tune up only with more memory.
+  RENDER_CONCURRENCY: z.coerce.number().int().positive().default(2),
 });
 
 const parsed = schema.safeParse(process.env);

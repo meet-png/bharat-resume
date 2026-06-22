@@ -70,6 +70,48 @@ async function markMessageProcessed(messageId) {
   return res === 'OK';
 }
 
+// Per-phone serialization lock. Two messages from the same student can be in
+// flight at once (a fast typer, or Meta redelivering a *different* message id),
+// and the state machine is read-modify-write on the session with no optimistic
+// version — so concurrent runs can clobber each other (lost update). This lock
+// makes a phone's messages process strictly one at a time.
+//
+// Held as `lock:msg:{phoneHash}` = random token (NX). The TTL is a safety valve:
+// if a holder crashes mid-message the lock auto-expires so the student is never
+// wedged. Release is a compare-and-delete (Lua) so a slow holder whose lock
+// already expired can't delete a *newer* holder's lock.
+const crypto = require('crypto');
+const PHONE_LOCK_TTL_MS = 30000;   // > worst-case generation (rewrite+PDF ~15s)
+const PHONE_LOCK_WAIT_MS = 22000;  // how long a 2nd message waits for the 1st
+const PHONE_LOCK_POLL_MS = 150;
+
+const RELEASE_LOCK_LUA =
+  "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
+
+async function acquirePhoneLock(phoneHash) {
+  const key = `lock:msg:${phoneHash}`;
+  const token = crypto.randomBytes(12).toString('hex');
+  const c = getClient();
+  const deadline = Date.now() + PHONE_LOCK_WAIT_MS;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const res = await c.set(key, token, 'PX', PHONE_LOCK_TTL_MS, 'NX');
+    if (res === 'OK') return token;
+    if (Date.now() >= deadline) return null; // give up; caller tells user to retry
+    await new Promise((r) => setTimeout(r, PHONE_LOCK_POLL_MS));
+  }
+}
+
+async function releasePhoneLock(phoneHash, token) {
+  if (!token) return;
+  try {
+    await getClient().eval(RELEASE_LOCK_LUA, 1, `lock:msg:${phoneHash}`, token);
+  } catch (e) {
+    // A failed release just means the lock TTL will reclaim it shortly.
+    require('../logger').warn({ err: e.message }, 'releasePhoneLock failed (will expire via TTL)');
+  }
+}
+
 // Returns { allowed, count, resetInSec }.
 async function checkRateLimit(phoneHash) {
   const key = `ratelimit:${phoneHash}`;
@@ -88,6 +130,8 @@ module.exports = {
   markPaymentProcessed,
   unmarkPaymentProcessed,
   markMessageProcessed,
+  acquirePhoneLock,
+  releasePhoneLock,
   checkRateLimit,
   SESSION_TTL_SEC,
   RATELIMIT_WINDOW_SEC,

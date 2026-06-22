@@ -161,6 +161,15 @@ const MESSAGES = {
     "Backend hiccup — try again in a moment.",
   ],
 
+  // Sent when a student fires a new message while their previous one is still
+  // being processed (e.g. resume is mid-generation). Their text isn't dropped —
+  // we just ask them to wait so two messages don't race on the session.
+  busy: [
+    "Ek sec — aapka pichla message abhi process ho raha hai. Thoda ruk ke bhejiye 🙏",
+    "Hang on — still working on your last message. Give me a few seconds and resend.",
+    "Abhi ek kaam chal raha hai ⏳ Bas thodi der mein dobara bhejiye.",
+  ],
+
   // When AWAITING_JD gets a "no specific role" / generic request.
   jdGenericAck: [
     "Cool — generic resume banayenge. Skills + experience emphasize karenge.",

@@ -7,7 +7,7 @@ const { deliverPdf } = require('./delivery');
 const { createPaymentLink } = require('../payment/razorpay');
 const { applyEdit } = require('../llm/edit');
 const { scoreResume, suggestionsFor } = require('../resume/ats_score');
-const { getSession, setSession, checkRateLimit, RATELIMIT_MAX } = require('../store/redis');
+const { getSession, setSession, checkRateLimit, acquirePhoneLock, releasePhoneLock, RATELIMIT_MAX } = require('../store/redis');
 const { logEvent } = require('../telemetry/events');
 const { config } = require('../config');
 const logger = require('../logger');
@@ -192,10 +192,26 @@ async function runEdit(session, phoneHash, instruction) {
   return text + '\n\n(PDF delivery failed — change saved. Try again in a moment.)';
 }
 
+// Public entry. Serializes a single student's messages with a per-phone lock so
+// two concurrent inbound messages can't race on the (read-modify-write) session.
+// A message that can't grab the lock within the wait window is told to retry —
+// its text isn't dropped, the student just resends.
 async function handle({ phoneHash, body, phoneFrom }) {
-  const trimmed = String(body || '').trim();
   if (!phoneHash) throw new Error('handle: phoneHash required');
+  const token = await acquirePhoneLock(phoneHash);
+  if (!token) {
+    logger.warn({ phoneHash: String(phoneHash).slice(0, 12) }, 'phone lock not acquired; asking student to retry');
+    return pickMessage('busy');
+  }
+  try {
+    return await handleInner({ phoneHash, body, phoneFrom });
+  } finally {
+    await releasePhoneLock(phoneHash, token);
+  }
+}
 
+async function handleInner({ phoneHash, body, phoneFrom }) {
+  const trimmed = String(body || '').trim();
   const phoneShort = phoneHash.slice(0, 12);
   logger.info({ phoneHash: phoneShort, bodyLen: trimmed.length, bodyHead: trimmed.slice(0, 30) }, 'router.handle inbound');
 

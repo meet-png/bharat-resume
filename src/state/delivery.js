@@ -7,7 +7,14 @@ const { renderHtml } = require('../resume/render');
 const { htmlToPdf } = require('../resume/pdf');
 const { watermarkPdf } = require('../resume/watermark');
 const { uploadAndSign } = require('../store/storage');
+const { createLimiter } = require('../util/limit');
+const { config } = require('../config');
 const logger = require('../logger');
+
+// Bound concurrent render+watermark pipelines per process — each holds a
+// Chromium page and rasterizes A4 at 3x, so a burst of inbound messages must
+// queue here rather than stampede memory. See src/util/limit.js + config.
+const renderLimit = createLimiter(config.RENDER_CONCURRENCY);
 
 function objectPathFor(phoneHash, opts = {}) {
   const sub = String(phoneHash || 'anon').slice(0, 12);
@@ -27,13 +34,24 @@ async function deliverPdf(session, phoneHash, opts = {}) {
   }
 
   try {
-    const html = renderHtml(r);
-    let pdf = await htmlToPdf(html);
-    if (!opts.clean) {
-      pdf = await watermarkPdf(pdf);
-    }
-    const objectPath = objectPathFor(phoneHash, opts);
-    const signedUrl = await uploadAndSign(objectPath, pdf);
+    // Gate the whole CPU/memory-heavy stretch (Chromium render → raster
+    // watermark → upload) through the limiter so concurrent deliveries queue
+    // instead of running all at once. Wait time, if any, is logged below.
+    const queuedAt = Date.now();
+    const { objectPath, signedUrl, pdfBytes } = await renderLimit(async () => {
+      const waitedMs = Date.now() - queuedAt;
+      if (waitedMs > 100) {
+        logger.info({ waitedMs, ...renderLimit.stats() }, 'render slot acquired after queue wait');
+      }
+      const html = renderHtml(r);
+      let pdf = await htmlToPdf(html);
+      if (!opts.clean) {
+        pdf = await watermarkPdf(pdf);
+      }
+      const path = objectPathFor(phoneHash, opts);
+      const url = await uploadAndSign(path, pdf);
+      return { objectPath: path, signedUrl: url, pdfBytes: pdf.length };
+    });
 
     session.pdf_storage_path = objectPath;
     session.pdf_signed_url = signedUrl;
@@ -44,9 +62,9 @@ async function deliverPdf(session, phoneHash, opts = {}) {
       ms: Date.now() - t0,
       path: objectPath,
       clean: !!opts.clean,
-      bytes: pdf.length,
+      bytes: pdfBytes,
     }, 'pdf delivered');
-    return { signedUrl, objectPath, bytes: pdf.length };
+    return { signedUrl, objectPath, bytes: pdfBytes };
   } catch (e) {
     logger.error({ phoneHash: String(phoneHash).slice(0, 12), err: e.message, stack: e.stack }, 'deliverPdf failed');
     return null;
