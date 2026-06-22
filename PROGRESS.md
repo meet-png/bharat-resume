@@ -273,6 +273,7 @@ Carry these forward each session until resolved. Add new ones whenever a build d
 - [x] **Edit iteration limit** — resolved Day 5.3: 3 free (watermarked) → pay nudge → 3 paid (clean).
 - [ ] **PRD §20 open items still open** — Naukri DOM selector (Day 3), ATS keyword count weighting (Day 5).
 - [ ] **GITHUB_TOKEN** — optional env var added to `.env.example`. Not set yet; unauthenticated GitHub API works at 60 req/hr — fine for prototype. Add token if we hit limits.
+- [ ] **DEFERRED (post-launch) — pilot-aware `/admin/metrics` dashboard.** In `PILOT_MODE` there are no payments, so the Paid / Conversion / Revenue cards and the payment funnel rows sit at zero by design — the live-useful pilot metrics are Students, Resumes delivered, Avg ATS, Edits, Recent events. Meet's call (2026-06-22): leave the dashboard as-is for now, revisit *after the product is in market* (no fixed date). Possible tweaks then: hide/replace revenue cards under the pilot flag, add an "edits per student" / completion-rate stat. Not a launch blocker.
 
 ---
 

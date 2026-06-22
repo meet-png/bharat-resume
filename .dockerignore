@@ -1,0 +1,28 @@
+# Build context hygiene — keep secrets, local-only, and dev files out of the image.
+node_modules
+.git
+.gitignore
+
+# Secrets — never bake .env into an image (allow the placeholder only).
+.env
+.env.*
+!.env.example
+
+# Local dev / test harness (gitignored too) — not needed at runtime.
+.runtime
+.puppeteer-cache
+.cache
+tmp
+coverage
+
+# Docs / progress notes — not needed at runtime.
+docs
+*.md
+
+# Logs / OS / editor cruft
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+.vscode
+.idea
