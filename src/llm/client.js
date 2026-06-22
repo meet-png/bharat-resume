@@ -34,8 +34,13 @@ async function complete({ system, user, model = config.LLM_PRIMARY, temperature 
       // are what distinguish a misconfigured prod key (401) or exhausted quota
       // (429) or missing model access (404) from a transient blip. Log them and
       // abort — retrying a 401/429/404 just burns another call on the same failure.
+      // "Connection error." (no status/code) means the request never reached
+      // OpenAI — a network/DNS/egress failure. The real errno (ETIMEDOUT /
+      // EAI_AGAIN / ECONNREFUSED) hides in e.cause; surface it so a transient
+      // blip is distinguishable from a hard egress/IPv6 problem.
+      const cause = e.cause || {};
       logger.error(
-        { status: e.status, code: e.code, type: e.type, err: e.message, model },
+        { status: e.status, code: e.code, type: e.type, causeCode: cause.code, causeMsg: cause.message, err: e.message, model },
         'openai request failed',
       );
       throw e;
