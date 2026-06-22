@@ -18,7 +18,7 @@
 | 2 | Fri 20 – Sun 21 Jun | State machine + info collection | ✅ Done | Full Phase 2 flow live: 13 sections, sufficiency-aware extraction, role-aware clarifications, GitHub repo enrichment for projects, 3-path JD (URL / role-name / generic / full JD text), Hinglish+English only (Latin script), 4 variants per state. 7-block offline smoke (`.runtime/smoke-router.js`) all pass. Verified end-to-end on WhatsApp. |
 | 3 | Sat 21 Jun | LLM rewrite + JD scrape | ✅ Done | Generation pipeline runs in ~8s (scrape + keywords + rewrite). Rewriter voice locked to `docs/template-reference.md` (Meet's actual resume). Preview shows Meet-style summary, action-verb bullets with selective `**bold**` on metrics, real keyword intersection (not raw JD list). 4 field-test bugs fixed: name re-asked, project link never asked, cert link never asked, weak preview / inflated keyword stuffing. |
 | 4 | Sun 22 Jun | PDF rendering + watermark | ✅ Done | WhatsApp delivers a real PDF: rewriter (Meet-template voice + 2-3 multi-angle bullets) → Handlebars HTML (Georgia + reference palette) → Puppeteer PDF → rasterized watermark → Supabase upload → 60s signed URL → Twilio `<Media>`. ~13s end-to-end. Six template-quality issues fixed (multi-metric bullets, per-entry tech stack inline italic, coursework state, achievement sufficiency, PoR pending accumulator, "Your skills matching the JD" labels real intersection). Regression contract live: `npm run check`. |
-| 5 | Mon 23 Jun | ATS score + payment + edit loop | 🟡 Partial | **5.1 ATS scorer ✅** (rewards bullet density + metric count, not just keyword match). **5.2 Razorpay payment unlock ✅** — `pay` → ₹49 Payment Link → `payment_link.paid` webhook → clean (un-watermarked) PDF regenerated + pushed outbound via Twilio API. Idempotent against webhook retries (Redis dedupe lock + unmark-on-failure). State graph: DELIVERED → AWAITING_PAYMENT → PAID_COMPLETE. **5.3 free-text edit loop ⬜ next.** |
+| 5 | Mon 23 Jun | ATS score + payment + edit loop | ✅ Done | **5.1 ATS scorer ✅** (rewards bullet density + metric count, not just keyword match). **5.2 Razorpay payment unlock ✅** — `pay` → ₹49 Payment Link → `payment_link.paid` webhook → clean (un-watermarked) PDF regenerated + pushed outbound via Twilio API. Idempotent against webhook retries (Redis dedupe lock + unmark-on-failure). State graph: DELIVERED → AWAITING_PAYMENT → PAID_COMPLETE. **5.3 free-text edit loop ✅** — `edit` → AWAITING_EDIT_OR_DONE → targeted LLM diff → re-score ATS → regenerate PDF (watermarked free / clean paid). Budget: **3 free edits → pay nudge → 3 more post-payment**, communicated to the student in preview + paid message + prompts. |
 | 6 | Tue 24 Jun | Telemetry, dashboard, deploy, dry run | ⬜ Not started | |
 | 7 | Wed 25 Jun | Launch to 100 | ⬜ Not started | |
 
@@ -33,6 +33,7 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 - `GET /health`, `POST /webhook/twilio` (signature-validated), `POST /webhook/razorpay` (HMAC verified), `GET /admin/metrics` (basic auth gated stub).
 - Razorpay test-mode Payment Link round-trip verified; HMAC signature verifier proven correct against valid/tampered/missing.
 - **Payment unlock (Day 5.2)**: `pay` in DELIVERED creates a ₹49 link (`src/payment/razorpay.js#createPaymentLink`, phone *hash* in `notes`, never the raw number). `POST /webhook/razorpay` verifies the HMAC, parses `payment_link.paid`, and `src/payment/fulfill.js#fulfillPayment` regenerates the clean PDF + pushes it outbound (`src/messaging/twilio.js#sendWhatsApp`). Idempotent: Redis `razorpay_paid:{payment_id}` NX lock (released on unexpected failure so Razorpay retries can re-run). Outbound send failure does NOT roll back a settled payment. `phone_from` persisted server-side on the session (private Redis only, never logged) so the async webhook can reach the student.
+- **Free-text edit loop (Day 5.3)**: `edit` in DELIVERED/PAID_COMPLETE → `AWAITING_EDIT_OR_DONE`. `src/llm/edit.js#applyEdit` does a targeted diff (returns the full patched schema, touching only the requested field, never inventing facts — ambiguous/factless requests come back as a clarification with the resume unchanged and no edit consumed). Each applied edit re-scores ATS (`rescore`) and regenerates a PDF — **watermarked** pre-payment, **clean** post-payment. Budget enforced per phase: `edits_free_used` capped at `MAX_FREE_EDITS` (3) → `editCapFree` reframes the cap as a reason to pay (not a hard wall) → `edits_paid_used` capped at `MAX_PAID_EDITS` (3) post-payment → `editCapPaid` final. `done` exits edit mode without consuming. The 3→pay→3 model is surfaced to the student in `buildPreview`, the post-payment message, and the edit prompts.
 - Supabase Postgres: 4 tables + 2 indexes + RLS, `db/schema.sql` is source of truth. `resumes` storage bucket private.
 - Upstash Redis (Mumbai): session store, JD cache key prefix, and rate limit (`30/60s per phone`) all wired. Helpers in `src/store/redis.js`.
 - **Day 2 state machine** (`src/state/router.js`): full PRD §6 state graph, NEW/CONFIRM_START unified, `reset` seeds AWAITING_CONFIRM_START and replies with confirmation + welcome in one message. SKIP_RE handles `skip`/`no`/`nahi`/`nope`/`none`/`nothing`. Top-of-handler tracing with branch/state/bodyHead logs.
@@ -45,9 +46,7 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 - Pino logger redacts all known secret-bearing keys + auth/signature headers. PII (phone) sha256-hashed before logging.
 
 **Scaffolded but not implemented (stubs throw, with `TODO Day N` markers):**
-- `src/llm/{rewrite,edit,keywords}.js` — Day 3 (rewriter takes raw `resume_json` + JD context → impact-oriented English) / Day 5 (edit prompt for free-text edits)
 - `src/jd/scrape.js` (Day 3 — Naukri Puppeteer scraper)
-- Day 5.3: free-text edit loop (edit prompt → re-rewrite specific sections → regenerate watermarked PDF)
 - `src/store/{postgres,storage}.js` — query helpers + signed-URL helpers
 - `src/telemetry/events.js` (Day 6 — event taxonomy constant defined)
 - `src/templates/resume.hbs` — head/contact only; sections TODO (Day 4)
@@ -184,6 +183,27 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 3. Router: `edit` in DELIVERED → AWAITING_EDIT_OR_DONE → apply edit → regenerate watermarked PDF → back to DELIVERED. Iteration cap (PRD §20 open item).
 4. Add edit-loop regression to the suite.
 
+### Session — 2026-06-22 (Day 5.2 live e2e + Day 5.3, Claude Opus 4.7)
+
+**Did (Day 5.2 live end-to-end verification):**
+- Ran the full real-money test path in Razorpay **test mode**: drove a WhatsApp session to DELIVERED, `pay` → ₹49 link, completed a real test payment (`pay_T4XWsdnJs7vwsf` on `plink_T4XFSPJl7T2mix`). Confirmed HMAC verified, `paid=true` persisted before delivery, `state=PAID_COMPLETE`, **clean** (un-watermarked) PDF regenerated + delivered. Idempotency confirmed by Razorpay's own retry being deduped (no double-send). Grepped logs + Razorpay `notes`: **zero** plaintext phone — only the sha256 hash.
+
+**Did (Day 5.3 free-text edit loop, fully built + green):**
+- `src/llm/edit.js#applyEdit` — targeted diff edit: returns the full patched schema, touches only the requested field, preserves `**bold**`, never invents facts. Factless/ambiguous requests → clarification + unchanged resume (no edit consumed). Defensive phone re-attach if the model drops it.
+- `src/state/router.js` — `EDIT_RE`/`DONE_RE`, `MAX_FREE_EDITS=3`/`MAX_PAID_EDITS=3`, `edits_free_used`/`edits_paid_used` on `newSession`. New `AWAITING_EDIT_OR_DONE` branch + `enterEdit`/`runEdit`/`rescore` helpers. `session.paid` decides counter, watermarked-vs-clean PDF, and which cap message fires.
+- `src/state/prompts.js` — `editPrompt`/`editApplied`/`editAppliedPaid`/`editCapFree`/`editCapPaid`/`editDone`/`editDonePaid`/`editFailed`; updated `paidComplete` + `deliveredHelp` to advertise the 3-edit budget.
+- `src/state/generator.js#buildPreview` — closing lines now state the 3 free → ₹49 → 3 more model.
+- `src/payment/fulfill.js` — `PAID_MESSAGE` invites `edit` and states 3 edits available.
+- `.runtime/test-edit.js` (25 checks) registered in `check.js` as the 6th suite. Full `npm run check` 6/6 green (~167s).
+
+**Decisions made (also in README Decisions log):**
+- Edit budget is **3 free (watermarked) → pay nudge → 3 paid (clean)**, with the post-3 nudge reframed as a reason to pay rather than a hard wall — Meet's call after weighing customer satisfaction.
+- Edits are a targeted diff (`applyEdit`), not a full re-rewrite — keeps unrelated fields byte-identical and cheap.
+
+**Launch-blockers surfaced (see §4):** Razorpay live KYC + UPI (UPI absent in test mode, needs account activation); webhook timeout vs. sync fulfilment (inline ~5.7s PDF gen exceeds Razorpay's ~5s timeout → ack 200 fast, fulfil async).
+
+**Next session — Day 6 (telemetry, dashboard, deploy, dry run):** wire `src/telemetry/events.js`, build the admin metrics dashboard, Railway deploy, and address the two launch-blockers before the 25 Jun launch.
+
 ## 4. Open questions for Meet
 
 Carry these forward each session until resolved. Add new ones whenever a build decision needs Meet's input.
@@ -202,14 +222,15 @@ Carry these forward each session until resolved. Add new ones whenever a build d
 - [x] **Day 2 voice / variants** — Hinglish + English only (Latin script). 3–5 variants per state. Saathi tone confirmed acceptable.
 - [x] **JD step paths** — 3 paths live (URL / role-name / generic) plus full JD text. Meet confirmed "we are good".
 - [x] **Role-aware extraction** — confirmed across 5+ diverse roles in smoke; clarifications adapt to role-native metrics.
-- [ ] **PRD §20 open items still open** — Naukri DOM selector (Day 3), ATS keyword count weighting (Day 5), edit iteration limit (Day 6).
+- [x] **Edit iteration limit** — resolved Day 5.3: 3 free (watermarked) → pay nudge → 3 paid (clean).
+- [ ] **PRD §20 open items still open** — Naukri DOM selector (Day 3), ATS keyword count weighting (Day 5).
 - [ ] **GITHUB_TOKEN** — optional env var added to `.env.example`. Not set yet; unauthenticated GitHub API works at 60 req/hr — fine for prototype. Add token if we hit limits.
 
 ---
 
 ## 6. Regression contract — "must keep working"
 
-`npm run check` runs `.runtime/check.js` which invokes five test files. They take ~2.5 min total and burn ~$0.05 of OpenAI per run. Each is a real end-to-end test against live OpenAI, Supabase, Redis, and (for payment) Razorpay test mode.
+`npm run check` runs `.runtime/check.js` which invokes six test files. They take ~2.8 min total and burn ~$0.05 of OpenAI per run. Each is a real end-to-end test against live OpenAI, Supabase, Redis, and (for payment) Razorpay test mode.
 
 **The contract:** anything below is currently verified working. If a future edit breaks any of these, the check fails and you DO NOT commit until it's fixed (or Meet has explicitly approved the change in behavior).
 
@@ -250,9 +271,17 @@ Carry these forward each session until resolved. Add new ones whenever a build d
 - **Router pay flow**: `pay` in DELIVERED → AWAITING_PAYMENT, `payment_link_url` stored, reply carries the URL, `phone_from` persisted.
 - **fulfillPayment**: marks `paid`, records `razorpay_payment_id`, advances to PAID_COMPLETE, produces a `clean: true` PDF version; `no_phone_from` path returns ok (no crash).
 - **Idempotency**: a second identical webhook is a no-op (`duplicate: true`). Missing `phone_hash` handled gracefully (no throw).
-- **PAID_COMPLETE** is terminal (no router fallthrough).
+- **PAID_COMPLETE** has no generic fallthrough — only `edit` (re-enters edit mode) is actionable.
 
-### 6.5 Flake handling
+### 6.5 `test-edit.js` — free-text edit loop, ~35s
+- **Enter edit mode**: `edit` in DELIVERED → `AWAITING_EDIT_OR_DONE`; prompt asks what to change and shows 3 remaining.
+- **Apply edit**: "change my email to …" actually changes the email, leaves unrelated fields (name) untouched, increments `edits_free_used` to 1, returns a `{ text, media }` reply with an HTTPS PDF, produces a **watermarked** version, and notes 2 free edits left, then returns to DELIVERED.
+- **Free cap → pay nudge**: with `edits_free_used=3`, `edit` does NOT enter edit mode; reply mentions pay/₹49 and stays DELIVERED (counter not exceeded).
+- **`done` exits**: returns to DELIVERED consuming no edit; reply is a string.
+- **Paid edit**: in PAID_COMPLETE, `edit` enters edit mode; the edit changes the field, increments `edits_paid_used` (free counter untouched), produces a **clean** version, re-attaches a PDF, and returns to PAID_COMPLETE.
+- **Paid cap → final**: with `edits_paid_used=3`, reply mentions reset/final and stays PAID_COMPLETE.
+
+### 6.6 Flake handling
 LLM responses and Supabase uploads can intermittently fail under network jitter or rate limits. Policy: **re-run `npm run check` once** before assuming a real regression. If it fails twice in a row on the same check → real regression, fix.
 
 **Flake sources (mitigated 2026-06-21):**
@@ -269,4 +298,4 @@ LLM responses and Supabase uploads can intermittently fail under network jitter 
 - Env shape: `.env.example`. Real `.env` is local-only (gitignored).
 - Code layout: PRD §16 — `src/{routes,state,llm,jd,resume,payment,store,telemetry,templates}/`.
 - Postgres schema source of truth: PRD §13.1 (apply manually in Supabase SQL editor for now; consider a `db/schema.sql` once Meet signs up).
-- Regression check: `npm run check` → runs `.runtime/check.js` → runs three tests defined in §6. Must pass before any commit.
+- Regression check: `npm run check` → runs `.runtime/check.js` → runs the six tests defined in §6. Must pass before any commit.

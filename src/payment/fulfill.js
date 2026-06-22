@@ -8,7 +8,7 @@ const { sendWhatsApp } = require('../messaging/twilio');
 const { STATES } = require('../state/states');
 const logger = require('../logger');
 
-const PAID_MESSAGE = 'Payment received ✓ Yeh raha aapka clean, ATS-readable resume — ab Naukri/LinkedIn sab isse properly parse karenge. All the best! 🎉';
+const PAID_MESSAGE = 'Payment received ✓ Yeh raha aapka clean, ATS-readable resume — ab Naukri/LinkedIn sab isse properly parse karenge. Koi change chahiye? Type "edit" — aapke paas 3 edits hain. All the best! 🎉';
 
 // Returns { ok, ... } for terminal cases that a retry can't help (missing
 // hash/paymentId, expired session, no delivery address) — these are acked so

@@ -192,7 +192,8 @@ function buildPreview(session) {
   lines.push(`⚠️  Watermarked + ATS-unreadable (ATS can't parse images).`);
   lines.push(`₹49 unlock = clean text-parseable PDF that Naukri reads.`);
   lines.push('');
-  lines.push(`Type "edit" to refine, or "pay" to unlock the clean version.`);
+  lines.push(`✏️ "edit" to refine — 3 free edits included.`);
+  lines.push(`💳 "pay" — ₹49 unlocks the clean PDF + 3 more edits.`);
 
   let out = lines.join('\n');
   // Hard cap; should be well under this anyway now.

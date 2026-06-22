@@ -5,6 +5,8 @@ const { extractSection, SECTION_CONFIG } = require('../llm/extract');
 const { runGeneration, buildPreview } = require('./generator');
 const { deliverPdf } = require('./delivery');
 const { createPaymentLink } = require('../payment/razorpay');
+const { applyEdit } = require('../llm/edit');
+const { scoreResume, suggestionsFor } = require('../resume/ats_score');
 const { getSession, setSession, checkRateLimit, RATELIMIT_MAX } = require('../store/redis');
 const logger = require('../logger');
 
@@ -17,6 +19,11 @@ const URL_RE = /^https?:\/\//i;
 const SHOW_RE = /^\s*show\s*me\s*$/i;
 const RESET_RE = /^\s*reset\s*$/i;
 const PAY_RE = /^\s*(pay|pay now|unlock|buy|purchase|₹?\s*49|haan pay)\s*$/i;
+const EDIT_RE = /^\s*(edit|edits|change|changes)\s*$/i;
+// Edit budget: 3 free (watermarked) edits before the pay nudge, then 3 more
+// post-payment (clean PDF). Communicated to the student at every boundary.
+const MAX_FREE_EDITS = 3;
+const MAX_PAID_EDITS = 3;
 
 function classifyJdInput(text) {
   const t = String(text || '').trim();
@@ -43,6 +50,8 @@ function newSession() {
     pdf_versions: [],
     paid: false,
     razorpay_payment_link_id: null,
+    edits_free_used: 0,
+    edits_paid_used: 0,
     created_at: new Date().toISOString(),
     last_message_at: new Date().toISOString(),
   };
@@ -86,6 +95,81 @@ async function startPayment(session, phoneHash) {
     logger.error({ err: e.message }, 'createPaymentLink failed');
     return pickMessage('paymentLinkFailed');
   }
+}
+
+// Re-runs the deterministic ATS scorer after the rewritten resume changes, so
+// the score/suggestions stay honest across edits.
+function rescore(session) {
+  if (!session.resume_json_rewritten) return;
+  const scored = scoreResume(session.resume_json_rewritten, session.jd_keywords || []);
+  session.ats_score = scored.total;
+  session.ats_breakdown = scored;
+  session.ats_suggestions = suggestionsFor(scored);
+}
+
+// Enters edit mode from DELIVERED (free budget) or PAID_COMPLETE (paid budget).
+// Caller persists. Returns the prompt string, or null if the budget is spent
+// (caller then sends the appropriate cap message).
+function enterEdit(session) {
+  const paid = !!session.paid;
+  const used = paid ? (session.edits_paid_used || 0) : (session.edits_free_used || 0);
+  const max = paid ? MAX_PAID_EDITS : MAX_FREE_EDITS;
+  if (used >= max) return null;
+  session.state = STATES.AWAITING_EDIT_OR_DONE;
+  return pickMessage('editPrompt', { remaining: max - used });
+}
+
+// Applies one free-text edit: LLM patch → re-score → regenerate the PDF (clean
+// if paid, watermarked otherwise). A real change consumes one edit and returns
+// the resting state (DELIVERED / PAID_COMPLETE); a clarification keeps the
+// student in edit mode and consumes nothing. Caller persists.
+// Returns { text, media } or a string.
+async function runEdit(session, phoneHash, instruction) {
+  const paid = !!session.paid;
+  const used = paid ? (session.edits_paid_used || 0) : (session.edits_free_used || 0);
+  const max = paid ? MAX_PAID_EDITS : MAX_FREE_EDITS;
+  if (used >= max) {
+    session.state = paid ? STATES.PAID_COMPLETE : STATES.DELIVERED;
+    return pickMessage(paid ? 'editCapPaid' : 'editCapFree');
+  }
+
+  let result;
+  try {
+    result = await applyEdit({
+      rewritten: session.resume_json_rewritten,
+      instruction,
+      jdRole: session.jd_role,
+      jdText: session.jd_text,
+      jdGeneric: session.jd_generic,
+    });
+  } catch (e) {
+    logger.error({ err: e.message }, 'applyEdit failed');
+    return pickMessage('editFailed');
+  }
+
+  if (result.clarification_needed || !result.data) {
+    // Stay in edit mode; nothing consumed.
+    return result.clarification_needed || pickMessage('editFailed');
+  }
+
+  session.resume_json_rewritten = result.data;
+  rescore(session);
+  const delivery = await deliverPdf(session, phoneHash, { clean: paid });
+
+  // A real change was applied — consume one edit (even if PDF re-delivery
+  // hiccups; the change is saved on the session).
+  if (paid) session.edits_paid_used = used + 1;
+  else session.edits_free_used = used + 1;
+  const remaining = max - (used + 1);
+
+  // Back to the resting state — the next 'edit'/'pay' is a command again.
+  session.state = paid ? STATES.PAID_COMPLETE : STATES.DELIVERED;
+
+  const text = pickMessage(paid ? 'editAppliedPaid' : 'editApplied', { remaining });
+  if (delivery && delivery.signedUrl) {
+    return { text, media: delivery.signedUrl };
+  }
+  return text + '\n\n(PDF delivery failed — change saved. Try again in a moment.)';
 }
 
 async function handle({ phoneHash, body, phoneFrom }) {
@@ -133,14 +217,38 @@ async function handle({ phoneHash, body, phoneFrom }) {
 
   const current = session.state;
 
-  // --- DELIVERED: watermarked PDF sent. "pay" → create link; edits land Day 5.3. ---
+  // --- DELIVERED: watermarked PDF sent. "pay" → create link; "edit" → edit loop. ---
   if (current === STATES.DELIVERED) {
     if (PAY_RE.test(trimmed)) {
       const reply = await startPayment(session, phoneHash);
       await setSession(phoneHash, session);
       return reply;
     }
+    if (EDIT_RE.test(trimmed)) {
+      const reply = enterEdit(session);
+      await setSession(phoneHash, session);
+      return reply || pickMessage('editCapFree');
+    }
     return pickMessage('deliveredHelp');
+  }
+
+  // --- AWAITING_EDIT_OR_DONE: next message is the change instruction (free or
+  // paid phase, decided by session.paid). 'done' exits; 'pay' (free phase) jumps
+  // to checkout. Anything else is the edit request. ---
+  if (current === STATES.AWAITING_EDIT_OR_DONE) {
+    if (DONE_RE.test(trimmed)) {
+      session.state = session.paid ? STATES.PAID_COMPLETE : STATES.DELIVERED;
+      await setSession(phoneHash, session);
+      return pickMessage(session.paid ? 'editDonePaid' : 'editDone');
+    }
+    if (PAY_RE.test(trimmed) && !session.paid) {
+      const reply = await startPayment(session, phoneHash);
+      await setSession(phoneHash, session);
+      return reply;
+    }
+    const reply = await runEdit(session, phoneHash, trimmed);
+    await setSession(phoneHash, session);
+    return reply;
   }
 
   // --- AWAITING_PAYMENT: link sent, waiting on the Razorpay webhook. ---
@@ -151,8 +259,14 @@ async function handle({ phoneHash, body, phoneFrom }) {
     return pickMessage('awaitingPayment', { url: session.payment_link_url || '' });
   }
 
-  // --- PAID_COMPLETE: clean PDF delivered. Terminal. ---
+  // --- PAID_COMPLETE: clean PDF delivered. "edit" → 3 post-payment edits on the
+  // clean version; otherwise terminal ack. ---
   if (current === STATES.PAID_COMPLETE) {
+    if (EDIT_RE.test(trimmed)) {
+      const reply = enterEdit(session);
+      await setSession(phoneHash, session);
+      return reply || pickMessage('editCapPaid');
+    }
     return pickMessage('paidComplete');
   }
 

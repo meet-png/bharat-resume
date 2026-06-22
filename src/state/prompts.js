@@ -190,9 +190,9 @@ const MESSAGES = {
   ],
 
   deliveredHelp: [
-    "Watermarked resume bhej diya ☝️ Type 'pay' to unlock the clean ATS-readable version for ₹49.",
-    "Aapka watermarked PDF upar hai. 'pay' likhiye to unlock the clean version (₹49).",
-    "Resume tayar (watermarked). Reply 'pay' for the clean, Naukri-readable PDF — just ₹49.",
+    "Watermarked resume bhej diya ☝️ Type 'edit' to refine (3 free edits), ya 'pay' to unlock the clean ATS-readable version for ₹49 (+ 3 more edits).",
+    "Aapka watermarked PDF upar hai. 'edit' for changes (3 included), ya 'pay' to unlock the clean version — ₹49, plus 3 edits.",
+    "Resume tayar (watermarked). 'edit' to tweak (3 free), or 'pay' for the clean Naukri-readable PDF — ₹49 and 3 more edits.",
   ],
 
   // Sent when the student types 'pay' — carries the Razorpay short URL.
@@ -216,9 +216,65 @@ const MESSAGES = {
   ],
 
   paidComplete: [
-    "Payment ho chuka hai ✓ Clean resume aapko bhej diya. All the best! 🎉",
-    "Done & paid ✓ Aapka clean ATS-readable resume deliver ho gaya. Good luck!",
-    "Sab set ✓ Clean version already sent. Type 'reset' for a fresh resume anytime.",
+    "Payment ho chuka hai ✓ Clean resume bhej diya. Type 'edit' for changes (3 included), ya 'reset' for a fresh one. All the best! 🎉",
+    "Done & paid ✓ Clean ATS-readable resume deliver ho gaya. 'edit' to refine (3 edits), 'reset' to start over. Good luck!",
+    "Sab set ✓ Clean version sent. 'edit' for tweaks (3 included), 'reset' for a fresh resume anytime.",
+  ],
+
+  // --- Edit loop (Day 5.3). Free phase (pre-payment) and paid phase share these. ---
+
+  // Entering edit mode — ask what to change, show remaining budget.
+  editPrompt: [
+    "Kya change karna hai? Ek line mein batao — e.g. 'CGPA 8.6 karo', 'last project hatao', 'summary chhoti karo'. ({remaining} edits left)",
+    "What should I change? One line — like 'fix my email', 'remove the 2nd bullet', 'shorten the summary'. ({remaining} edits left)",
+    "Batao kya edit karna hai — ek line. ({remaining} edits remaining)",
+  ],
+
+  // Edit applied — PDF re-attached above. Free phase.
+  editApplied: [
+    "Updated ✓ {remaining} free edits left. Type 'edit' for another change, ya 'pay' to unlock the clean PDF.",
+    "Done ✓ Naya version upar hai. {remaining} free edits bache. 'edit' for more, 'pay' for the clean copy.",
+    "Changed ✓ {remaining} edits left. Keep editing with 'edit', or 'pay' for the ATS-readable version.",
+  ],
+
+  // Edit applied — paid phase (clean PDF re-attached).
+  editAppliedPaid: [
+    "Updated ✓ {remaining} edits left. Type 'edit' for another change.",
+    "Done ✓ Clean resume re-sent above. {remaining} edits remaining. 'edit' for more.",
+    "Changed ✓ {remaining} edits left. 'edit' anytime for another tweak.",
+  ],
+
+  // Free edits exhausted → the nudge to pay (and the promise of 3 more after).
+  editCapFree: [
+    "Aapke 3 free edits ho gaye 💪 Resume already strong hai — ₹49 pay karke clean PDF lo, aur main 3 aur edits kar dunga uspe. Type 'pay'.",
+    "That's all 3 free edits done 💪 Pay ₹49 for the clean ATS-readable PDF and you get 3 MORE edits on it. Type 'pay'.",
+    "3 free edits complete ✓ Clean version unlock karo ₹49 mein — plus 3 fresh edits included. Type 'pay'.",
+  ],
+
+  // Paid edits exhausted → final.
+  editCapPaid: [
+    "Aapke 3 post-payment edits bhi ho gaye — resume ab final hai ✓ Type 'reset' for a brand-new resume anytime.",
+    "All 3 paid edits used ✓ Your clean resume is final. 'reset' if you want to build a fresh one.",
+    "That's the last edit ✓ Resume locked in. Type 'reset' to start a new one from scratch.",
+  ],
+
+  // Student typed 'done' to leave edit mode.
+  editDone: [
+    "Cool ✓ Jab ready ho 'pay' likho clean PDF ke liye, ya 'edit' for more changes.",
+    "Got it ✓ Type 'pay' when you want the clean copy, or 'edit' to tweak more.",
+    "Done editing for now ✓ 'pay' to unlock, 'edit' to change something else.",
+  ],
+
+  editDonePaid: [
+    "Done ✓ Clean resume already aapke paas hai. 'edit' anytime for more changes.",
+    "Cool ✓ Your clean resume is delivered. Type 'edit' whenever you want another tweak.",
+    "All set ✓ 'edit' for more changes, 'reset' for a fresh resume.",
+  ],
+
+  editFailed: [
+    "Edit apply nahi hua — ek baar phir bhejiye? Ya 'done' to keep the current version.",
+    "Couldn't apply that change — try rephrasing? Or 'done' to keep it as is.",
+    "Hmm, that edit didn't go through. One more time, or 'done' to keep current.",
   ],
 
   beyondPhase2: [
