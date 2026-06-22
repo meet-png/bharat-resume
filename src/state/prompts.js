@@ -148,13 +148,6 @@ const MESSAGES = {
     "Got it — project #{n} ✓. Add more, or 'done' to wrap projects.",
   ],
 
-  extractFail: [
-    "Hmm, samajh nahi aaya. Ek baar phir bhej dijiye?",
-    "Could you rephrase that?",
-    "Confused ho gaya — try again?",
-    "Didn't quite catch that. One more time?",
-  ],
-
   serverError: [
     "Server pe kuch issue hai. 30s baad try kariye.",
     "Hmm, something broke. Give it 30s and retry.",

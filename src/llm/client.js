@@ -1,6 +1,7 @@
 // LLM wrapper: OpenAI only. PRD §3, §7.5 (Anthropic dropped per README Decisions log 2026-06-20).
 // Strict JSON mode; one retry on JSON.parse failure with the same model.
 const { config } = require('../config');
+const logger = require('../logger');
 
 let openaiClient = null;
 
@@ -16,23 +17,37 @@ async function complete({ system, user, model = config.LLM_PRIMARY, temperature 
   let lastErr;
 
   for (let attempt = 0; attempt < 2; attempt++) {
-    const res = await openai.chat.completions.create({
-      model,
-      temperature,
-      max_tokens: maxTokens,
-      response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: user },
-      ],
-    });
+    let res;
+    try {
+      res = await openai.chat.completions.create({
+        model,
+        temperature,
+        max_tokens: maxTokens,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+      });
+    } catch (e) {
+      // OpenAI SDK error (auth, quota, model-access, network). status/code/type
+      // are what distinguish a misconfigured prod key (401) or exhausted quota
+      // (429) or missing model access (404) from a transient blip. Log them and
+      // abort — retrying a 401/429/404 just burns another call on the same failure.
+      logger.error(
+        { status: e.status, code: e.code, type: e.type, err: e.message, model },
+        'openai request failed',
+      );
+      throw e;
+    }
 
     const raw = res.choices?.[0]?.message?.content || '{}';
     try {
       const data = JSON.parse(raw);
       return { data, usage: res.usage, model: res.model, attempts: attempt + 1 };
-    } catch (e) {
+    } catch {
       lastErr = new Error(`LLM returned invalid JSON (attempt ${attempt + 1}): ${raw.slice(0, 200)}`);
+      logger.warn({ attempt: attempt + 1, model, rawHead: raw.slice(0, 120) }, 'llm json parse failed');
     }
   }
   throw lastErr;

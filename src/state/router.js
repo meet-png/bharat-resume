@@ -382,8 +382,12 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
       await setSession(phoneHash, session);
       return (await tryGenerate(session, phoneFrom, phoneHash)) || pickPrompt(session.state);
     } catch (e) {
-      logger.error({ err: e.message, state: current }, 'extract failed');
-      return pickMessage('extractFail');
+      // A throw here is a BACKEND failure (LLM call errored or returned
+      // unparseable JSON), never a "bad user input" — that path returns the
+      // LLM's own clarification_needed above. So tell the student the server
+      // hiccuped, not that their (often perfectly valid) message was unclear.
+      logger.error({ err: e.message, status: e.status, code: e.code, state: current, bodyLen: trimmed.length }, 'extract failed');
+      return pickMessage('serverError');
     }
   }
 
@@ -418,8 +422,12 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
       await setSession(phoneHash, session);
       return pickMessage('projectSaved', { n: session.resume_json.projects.length });
     } catch (e) {
-      logger.error({ err: e.message, state: current }, 'extract failed');
-      return pickMessage('extractFail');
+      // A throw here is a BACKEND failure (LLM call errored or returned
+      // unparseable JSON), never a "bad user input" — that path returns the
+      // LLM's own clarification_needed above. So tell the student the server
+      // hiccuped, not that their (often perfectly valid) message was unclear.
+      logger.error({ err: e.message, status: e.status, code: e.code, state: current, bodyLen: trimmed.length }, 'extract failed');
+      return pickMessage('serverError');
     }
   }
 
@@ -445,8 +453,12 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
       await setSession(phoneHash, session);
       return genReply || pickPrompt(session.state);
     } catch (e) {
-      logger.error({ err: e.message, state: current }, 'extract failed');
-      return pickMessage('extractFail');
+      // A throw here is a BACKEND failure (LLM call errored or returned
+      // unparseable JSON), never a "bad user input" — that path returns the
+      // LLM's own clarification_needed above. So tell the student the server
+      // hiccuped, not that their (often perfectly valid) message was unclear.
+      logger.error({ err: e.message, status: e.status, code: e.code, state: current, bodyLen: trimmed.length }, 'extract failed');
+      return pickMessage('serverError');
     }
   }
 
