@@ -8,7 +8,13 @@ let openaiClient = null;
 function getOpenAI() {
   if (openaiClient) return openaiClient;
   const OpenAI = require('openai');
-  openaiClient = new OpenAI({ apiKey: config.OPENAI_API_KEY });
+  // Trim the key. Pasting into a hosting panel (Railway) very often appends a
+  // trailing newline/space; a stray char in the Authorization header value
+  // makes undici throw a header-validation error that surfaces as an opaque
+  // "Connection error." (no errno) — and echoes the key into the error message.
+  // Trimming kills the most common, hardest-to-diagnose prod failure here.
+  const apiKey = String(config.OPENAI_API_KEY || '').trim();
+  openaiClient = new OpenAI({ apiKey });
   return openaiClient;
 }
 
