@@ -15,6 +15,15 @@ const schema = z.object({
   TWILIO_AUTH_TOKEN: z.preprocess(emptyAsUndefined, z.string().optional()),
   TWILIO_WHATSAPP_FROM: z.string().default('whatsapp:+14155238886'),
 
+  // Meta WhatsApp Cloud API (migration target — see docs/META_MIGRATION_PLAN.md).
+  // All optional so the bot still boots on Twilio while these are being filled in.
+  WHATSAPP_PROVIDER: z.enum(['twilio', 'meta']).default('twilio'),
+  META_PHONE_NUMBER_ID: z.preprocess(emptyAsUndefined, z.string().optional()),
+  META_WABA_ID: z.preprocess(emptyAsUndefined, z.string().optional()),
+  META_APP_SECRET: z.preprocess(emptyAsUndefined, z.string().optional()),
+  META_VERIFY_TOKEN: z.preprocess(emptyAsUndefined, z.string().optional()),
+  META_WHATSAPP_TOKEN: z.preprocess(emptyAsUndefined, z.string().optional()),
+
   SUPABASE_URL: z.preprocess(emptyAsUndefined, z.string().url().optional()),
   SUPABASE_SERVICE_ROLE_KEY: z.preprocess(emptyAsUndefined, z.string().optional()),
   SUPABASE_STORAGE_BUCKET: z.string().default('resumes'),

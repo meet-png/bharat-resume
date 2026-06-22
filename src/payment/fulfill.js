@@ -4,7 +4,7 @@
 // (un-watermarked) PDF, and pushes it to the student over WhatsApp.
 const { getSession, setSession, markPaymentProcessed, unmarkPaymentProcessed } = require('../store/redis');
 const { deliverPdf } = require('../state/delivery');
-const { sendWhatsApp } = require('../messaging/twilio');
+const { sendWhatsApp } = require('../messaging');
 const { STATES } = require('../state/states');
 const { logEvent } = require('../telemetry/events');
 const logger = require('../logger');

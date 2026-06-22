@@ -57,6 +57,19 @@ async function unmarkPaymentProcessed(paymentId) {
   await getClient().del(`razorpay_paid:${paymentId}`);
 }
 
+// Inbound WhatsApp message idempotency. Meta re-delivers a webhook if our 200
+// is slow or it thinks we missed it, and each delivery carries the same message
+// id. First writer wins: returns true only the first time a given message id is
+// seen, so the state machine never processes one student message twice. 1h TTL
+// comfortably covers Meta's retry window without growing the keyspace.
+const MESSAGE_DEDUPE_TTL_SEC = 60 * 60;
+
+async function markMessageProcessed(messageId) {
+  if (!messageId) return true; // nothing to dedupe on — let it through
+  const res = await getClient().set(`wa_msg:${messageId}`, '1', 'EX', MESSAGE_DEDUPE_TTL_SEC, 'NX');
+  return res === 'OK';
+}
+
 // Returns { allowed, count, resetInSec }.
 async function checkRateLimit(phoneHash) {
   const key = `ratelimit:${phoneHash}`;
@@ -74,6 +87,7 @@ module.exports = {
   deleteSession,
   markPaymentProcessed,
   unmarkPaymentProcessed,
+  markMessageProcessed,
   checkRateLimit,
   SESSION_TTL_SEC,
   RATELIMIT_WINDOW_SEC,

@@ -6,6 +6,7 @@ const { config } = require('./config');
 const logger = require('./logger');
 
 const twilioRouter = require('./routes/twilio');
+const whatsappRouter = require('./routes/whatsapp');
 const razorpayRouter = require('./routes/razorpay');
 const adminRouter = require('./routes/admin');
 
@@ -19,9 +20,10 @@ app.disable('x-powered-by');
 app.use(helmet({ contentSecurityPolicy: false })); // CSP off for now; payment-success.html is the only HTML.
 app.use(pinoHttp({ logger }));
 
-// /webhook/razorpay needs the raw body for HMAC, so it mounts its own express.raw
-// inside the router BEFORE these global parsers run.
+// /webhook/razorpay and /webhook/whatsapp need the raw body for HMAC, so they
+// mount their own body parsers inside the router BEFORE these global parsers run.
 app.use('/webhook/razorpay', razorpayRouter);
+app.use('/webhook/whatsapp', whatsappRouter);
 
 app.use(express.json({ limit: '100kb' }));
 app.use(express.urlencoded({ extended: false, limit: '100kb' }));

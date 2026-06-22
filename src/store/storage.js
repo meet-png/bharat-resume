@@ -1,12 +1,15 @@
 // Supabase Storage upload + signed URL. PRD §3, §5 Phase 3 step 5.
-// Signed URLs use 60s TTL — long enough for Twilio to fetch the media,
-// short enough to make scraping the bucket pointless.
+// Signed URLs use a 300s TTL — Meta's Cloud API fetches the document link
+// server-side AFTER we ack the webhook (async send), so the URL must outlive
+// that round-trip; Twilio fetched synchronously and was fine on 60s. 5 min is
+// still short enough to make scraping the bucket pointless. See
+// docs/META_MIGRATION_PLAN.md §4 (media TTL).
 const { getClient } = require('./postgres');
 const { config } = require('../config');
 const logger = require('../logger');
 
 const BUCKET = config.SUPABASE_STORAGE_BUCKET || 'resumes';
-const SIGNED_URL_TTL_SEC = 60;
+const SIGNED_URL_TTL_SEC = 300;
 
 // Upload a PDF buffer to Supabase Storage at the given object path.
 // Returns the upload result (or throws).

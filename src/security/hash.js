@@ -3,9 +3,11 @@ const crypto = require('crypto');
 
 function hashPhone(phone) {
   if (!phone) return null;
-  // Normalise: strip 'whatsapp:' prefix and any non-digits before hashing,
-  // so the same student always produces the same hash regardless of channel quirks.
-  const normalised = String(phone).replace(/^whatsapp:/i, '').replace(/[^\d+]/g, '');
+  // Normalise to digits only before hashing. Twilio gives `whatsapp:+919999...`
+  // while Meta's wa_id is `919999...` (no `+`); stripping ALL non-digits makes
+  // the same student hash identically across both providers. See
+  // docs/META_MIGRATION_PLAN.md §4 (phone format).
+  const normalised = String(phone).replace(/^whatsapp:/i, '').replace(/[^\d]/g, '');
   return crypto.createHash('sha256').update(normalised).digest('hex');
 }
 
