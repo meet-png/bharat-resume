@@ -45,6 +45,11 @@ const schema = z.object({
 
   ADMIN_USERNAME: z.string().default('meet'),
   ADMIN_PASSWORD: z.preprocess(emptyAsUndefined, z.string().optional()),
+
+  // Pilot mode: students get the clean (un-watermarked) PDF + the full edit
+  // budget without paying. For the free JECRC pilot where we validate output
+  // quality, not conversion. Off by default — the paid flow is untouched.
+  PILOT_MODE: z.preprocess((v) => v === 'true' || v === true, z.boolean().default(false)),
 });
 
 const parsed = schema.safeParse(process.env);

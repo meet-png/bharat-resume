@@ -9,7 +9,16 @@ const { applyEdit } = require('../llm/edit');
 const { scoreResume, suggestionsFor } = require('../resume/ats_score');
 const { getSession, setSession, checkRateLimit, RATELIMIT_MAX } = require('../store/redis');
 const { logEvent } = require('../telemetry/events');
+const { config } = require('../config');
 const logger = require('../logger');
+
+// A session is "unlocked" — clean PDF + paid edit budget, no ₹49 gate — when the
+// student has paid OR the free pilot is on. Single source of truth so delivery,
+// edits, and the preview CTA all agree. Pilot never sets session.paid, so
+// telemetry/revenue (driven by payment_succeeded events) stays clean.
+function unlocked(session) {
+  return !!session.paid || !!session.pilot;
+}
 
 const SKIP_RE = /^\s*(skip|no|nahi|nahin|nope|none|nothing|na|n\/a|kuch nahi|no thanks)\s*$/i;
 const DONE_RE = /^\s*(done|finish|finished|bas|over|complete)\s*$/i;
@@ -50,6 +59,7 @@ function newSession() {
     iteration_count: 0,
     pdf_versions: [],
     paid: false,
+    pilot: !!config.PILOT_MODE,
     razorpay_payment_link_id: null,
     edits_free_used: 0,
     edits_paid_used: 0,
@@ -65,7 +75,7 @@ async function tryGenerate(session, phoneFrom, phoneHash) {
   if (session.state !== STATES.GENERATING) return null;
   try {
     await runGeneration(session, phoneFrom);
-    const delivery = await deliverPdf(session, phoneHash, { clean: false });
+    const delivery = await deliverPdf(session, phoneHash, { clean: unlocked(session) });
     session.state = STATES.DELIVERED;
     logEvent({ phoneHash, eventName: 'resume_delivered', state: STATES.DELIVERED, payload: { ats_score: session.ats_score } });
     const text = buildPreview(session);
@@ -114,7 +124,7 @@ function rescore(session) {
 // Caller persists. Returns the prompt string, or null if the budget is spent
 // (caller then sends the appropriate cap message).
 function enterEdit(session) {
-  const paid = !!session.paid;
+  const paid = unlocked(session);
   const used = paid ? (session.edits_paid_used || 0) : (session.edits_free_used || 0);
   const max = paid ? MAX_PAID_EDITS : MAX_FREE_EDITS;
   if (used >= max) return null;
@@ -128,7 +138,7 @@ function enterEdit(session) {
 // student in edit mode and consumes nothing. Caller persists.
 // Returns { text, media } or a string.
 async function runEdit(session, phoneHash, instruction) {
-  const paid = !!session.paid;
+  const paid = unlocked(session);
   const used = paid ? (session.edits_paid_used || 0) : (session.edits_free_used || 0);
   const max = paid ? MAX_PAID_EDITS : MAX_FREE_EDITS;
   if (used >= max) {
@@ -224,17 +234,20 @@ async function handle({ phoneHash, body, phoneFrom }) {
 
   // --- DELIVERED: watermarked PDF sent. "pay" → create link; "edit" → edit loop. ---
   if (current === STATES.DELIVERED) {
-    if (PAY_RE.test(trimmed)) {
+    if (PAY_RE.test(trimmed) && !unlocked(session)) {
       const reply = await startPayment(session, phoneHash);
       await setSession(phoneHash, session);
       return reply;
     }
+    if (PAY_RE.test(trimmed) && unlocked(session)) {
+      return pickMessage('pilotNoPay');
+    }
     if (EDIT_RE.test(trimmed)) {
       const reply = enterEdit(session);
       await setSession(phoneHash, session);
-      return reply || pickMessage('editCapFree');
+      return reply || pickMessage(unlocked(session) ? 'editCapPaid' : 'editCapFree');
     }
-    return pickMessage('deliveredHelp');
+    return pickMessage(unlocked(session) ? 'paidComplete' : 'deliveredHelp');
   }
 
   // --- AWAITING_EDIT_OR_DONE: next message is the change instruction (free or
@@ -242,11 +255,11 @@ async function handle({ phoneHash, body, phoneFrom }) {
   // to checkout. Anything else is the edit request. ---
   if (current === STATES.AWAITING_EDIT_OR_DONE) {
     if (DONE_RE.test(trimmed)) {
-      session.state = session.paid ? STATES.PAID_COMPLETE : STATES.DELIVERED;
+      session.state = unlocked(session) ? STATES.PAID_COMPLETE : STATES.DELIVERED;
       await setSession(phoneHash, session);
-      return pickMessage(session.paid ? 'editDonePaid' : 'editDone');
+      return pickMessage(unlocked(session) ? 'editDonePaid' : 'editDone');
     }
-    if (PAY_RE.test(trimmed) && !session.paid) {
+    if (PAY_RE.test(trimmed) && !unlocked(session)) {
       const reply = await startPayment(session, phoneHash);
       await setSession(phoneHash, session);
       return reply;
@@ -420,4 +433,4 @@ async function handle({ phoneHash, body, phoneFrom }) {
   return pickMessage('beyondPhase2');
 }
 
-module.exports = { handle, newSession };
+module.exports = { handle, newSession, unlocked };

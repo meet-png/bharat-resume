@@ -195,6 +195,13 @@ const MESSAGES = {
     "Resume tayar (watermarked). 'edit' to tweak (3 free), or 'pay' for the clean Naukri-readable PDF — ₹49 and 3 more edits.",
   ],
 
+  // Pilot students typed 'pay' but already have the clean PDF for free.
+  pilotNoPay: [
+    "No payment needed 🎉 Aapko clean ATS-readable PDF already mil chuka hai — bilkul free. Type 'edit' to refine it.",
+    "It's on us ✓ Aapka clean resume already unlocked hai — koi ₹49 nahi. 'edit' to make changes.",
+    "Free pilot ✨ Clean PDF already deliver ho chuka — nothing to pay. 'edit' for any tweaks.",
+  ],
+
   // Sent when the student types 'pay' — carries the Razorpay short URL.
   paymentLink: [
     "Yahan se ₹49 pay kar dijiye, clean PDF turant aa jayega 👇\n{url}",

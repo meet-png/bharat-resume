@@ -189,11 +189,20 @@ function buildPreview(session) {
   }
 
   lines.push('');
-  lines.push(`⚠️  Watermarked + ATS-unreadable (ATS can't parse images).`);
-  lines.push(`₹49 unlock = clean text-parseable PDF that Naukri reads.`);
-  lines.push('');
-  lines.push(`✏️ "edit" to refine — 3 free edits included.`);
-  lines.push(`💳 "pay" — ₹49 unlocks the clean PDF + 3 more edits.`);
+  // Pilot/paid students already have the clean, ATS-parseable PDF — no
+  // watermark, no ₹49 gate. Everyone else sees the conversion CTA.
+  const isUnlocked = !!session.paid || !!session.pilot;
+  if (isUnlocked) {
+    lines.push(`✅ Clean, ATS-parseable PDF — ready to send to recruiters.`);
+    lines.push('');
+    lines.push(`✏️ "edit" to refine — 3 edits included.`);
+  } else {
+    lines.push(`⚠️  Watermarked + ATS-unreadable (ATS can't parse images).`);
+    lines.push(`₹49 unlock = clean text-parseable PDF that Naukri reads.`);
+    lines.push('');
+    lines.push(`✏️ "edit" to refine — 3 free edits included.`);
+    lines.push(`💳 "pay" — ₹49 unlocks the clean PDF + 3 more edits.`);
+  }
 
   let out = lines.join('\n');
   // Hard cap; should be well under this anyway now.
