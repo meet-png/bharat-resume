@@ -8,6 +8,7 @@ const { createPaymentLink } = require('../payment/razorpay');
 const { applyEdit } = require('../llm/edit');
 const { scoreResume, suggestionsFor } = require('../resume/ats_score');
 const { getSession, setSession, checkRateLimit, RATELIMIT_MAX } = require('../store/redis');
+const { logEvent } = require('../telemetry/events');
 const logger = require('../logger');
 
 const SKIP_RE = /^\s*(skip|no|nahi|nahin|nope|none|nothing|na|n\/a|kuch nahi|no thanks)\s*$/i;
@@ -66,6 +67,7 @@ async function tryGenerate(session, phoneFrom, phoneHash) {
     await runGeneration(session, phoneFrom);
     const delivery = await deliverPdf(session, phoneHash, { clean: false });
     session.state = STATES.DELIVERED;
+    logEvent({ phoneHash, eventName: 'resume_delivered', state: STATES.DELIVERED, payload: { ats_score: session.ats_score } });
     const text = buildPreview(session);
     if (delivery && delivery.signedUrl) {
       return { text, media: delivery.signedUrl };
@@ -90,6 +92,7 @@ async function startPayment(session, phoneHash) {
     session.razorpay_payment_link_id = link.id;
     session.payment_link_url = link.short_url;
     session.state = STATES.AWAITING_PAYMENT;
+    logEvent({ phoneHash, eventName: 'payment_link_created', state: STATES.AWAITING_PAYMENT, payload: { amount: 49 } });
     return pickMessage('paymentLink', { url: link.short_url });
   } catch (e) {
     logger.error({ err: e.message }, 'createPaymentLink failed');
@@ -161,6 +164,7 @@ async function runEdit(session, phoneHash, instruction) {
   if (paid) session.edits_paid_used = used + 1;
   else session.edits_free_used = used + 1;
   const remaining = max - (used + 1);
+  logEvent({ phoneHash, eventName: 'edit_requested', state: session.state, payload: { phase: paid ? 'paid' : 'free', remaining } });
 
   // Back to the resting state — the next 'edit'/'pay' is a command again.
   session.state = paid ? STATES.PAID_COMPLETE : STATES.DELIVERED;
@@ -197,6 +201,7 @@ async function handle({ phoneHash, body, phoneFrom }) {
     session = newSession();
     session.state = STATES.AWAITING_CONFIRM_START;
     await setSession(phoneHash, session);
+    logEvent({ phoneHash, eventName: 'session_started', state: STATES.AWAITING_CONFIRM_START });
     return pickPrompt(STATES.NEW);
   }
 

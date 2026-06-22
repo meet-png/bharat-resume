@@ -19,7 +19,7 @@
 | 3 | Sat 21 Jun | LLM rewrite + JD scrape | ✅ Done | Generation pipeline runs in ~8s (scrape + keywords + rewrite). Rewriter voice locked to `docs/template-reference.md` (Meet's actual resume). Preview shows Meet-style summary, action-verb bullets with selective `**bold**` on metrics, real keyword intersection (not raw JD list). 4 field-test bugs fixed: name re-asked, project link never asked, cert link never asked, weak preview / inflated keyword stuffing. |
 | 4 | Sun 22 Jun | PDF rendering + watermark | ✅ Done | WhatsApp delivers a real PDF: rewriter (Meet-template voice + 2-3 multi-angle bullets) → Handlebars HTML (Georgia + reference palette) → Puppeteer PDF → rasterized watermark → Supabase upload → 60s signed URL → Twilio `<Media>`. ~13s end-to-end. Six template-quality issues fixed (multi-metric bullets, per-entry tech stack inline italic, coursework state, achievement sufficiency, PoR pending accumulator, "Your skills matching the JD" labels real intersection). Regression contract live: `npm run check`. |
 | 5 | Mon 23 Jun | ATS score + payment + edit loop | ✅ Done | **5.1 ATS scorer ✅** (rewards bullet density + metric count, not just keyword match). **5.2 Razorpay payment unlock ✅** — `pay` → ₹49 Payment Link → `payment_link.paid` webhook → clean (un-watermarked) PDF regenerated + pushed outbound via Twilio API. Idempotent against webhook retries (Redis dedupe lock + unmark-on-failure). State graph: DELIVERED → AWAITING_PAYMENT → PAID_COMPLETE. **5.3 free-text edit loop ✅** — `edit` → AWAITING_EDIT_OR_DONE → targeted LLM diff → re-score ATS → regenerate PDF (watermarked free / clean paid). Budget: **3 free edits → pay nudge → 3 more post-payment**, communicated to the student in preview + paid message + prompts. |
-| 6 | Tue 24 Jun | Telemetry, dashboard, deploy, dry run | ⬜ Not started | |
+| 6 | Tue 24 Jun | Telemetry, dashboard, deploy, dry run | 🟡 Partial | **Telemetry ✅** — fire-and-forget `logEvent` → Postgres `events` (+ `users` upsert) at the funnel points (session_started, resume_delivered, payment_link_created, edit_requested, payment_succeeded, clean_pdf_delivered). Never blocks a reply, never throws, disabled under `NODE_ENV=test` so the suite can't pollute the live dashboard. **Dashboard ✅** — basic-auth `GET /admin/metrics` renders students/paid/conversion/revenue/avg-ATS + funnel + edits + today + recent-events feed. **Deploy + dry run ⬜** (Meet-gated). **Messaging migration** (Twilio sandbox → Meta Cloud API) under evaluation — see §4. |
 | 7 | Wed 25 Jun | Launch to 100 | ⬜ Not started | |
 
 Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
@@ -44,12 +44,12 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 - **Cert simplification** (Decisions log 2026-06-21): collect `{name, url}` only. No more issuer/date follow-ups. Day 4 template will render as hyperlink (name = display, url = href).
 - **PoR jargon removed**: "leadership/responsibility role" with examples, no "PoR" acronym anywhere.
 - Pino logger redacts all known secret-bearing keys + auth/signature headers. PII (phone) sha256-hashed before logging.
+- **Telemetry (Day 6)**: `src/telemetry/events.js#logEvent` writes the funnel to Postgres `events` (FK → `users`, upserted by phone *hash*). Fire-and-forget — called WITHOUT await from the router/fulfilment hot path; internal try/catch means a DB failure logs and is swallowed (telemetry can never break a student's conversation). Skips entirely under `NODE_ENV=test`. Helpers live in `src/store/postgres.js` (`upsertUser`, `insertEvent`, `fetchMetrics`).
+- **Admin dashboard (Day 6)**: `GET /admin/metrics` (basic-auth) renders a server-side HTML funnel from `fetchMetrics()` — students, paid, conversion %, revenue (₹49 × paid), avg ATS, the 5-stage funnel as % of sessions, free/paid edits, today's counts, and the last 15 events. No client JS; values HTML-escaped.
 
 **Scaffolded but not implemented (stubs throw, with `TODO Day N` markers):**
 - `src/jd/scrape.js` (Day 3 — Naukri Puppeteer scraper)
-- `src/store/{postgres,storage}.js` — query helpers + signed-URL helpers
-- `src/telemetry/events.js` (Day 6 — event taxonomy constant defined)
-- `src/templates/resume.hbs` — head/contact only; sections TODO (Day 4)
+- `src/store/postgres.js` — `insertResume`/`insertPayment` still TODO (telemetry uses `upsertUser`/`insertEvent`/`fetchMetrics`, implemented Day 6); `src/store/storage.js` signed-URL helpers TODO
 
 **Not yet:**
 - Railway deploy (Day 6 milestone). Local + ngrok-fronted dev is current setup.
@@ -204,6 +204,28 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 
 **Next session — Day 6 (telemetry, dashboard, deploy, dry run):** wire `src/telemetry/events.js`, build the admin metrics dashboard, Railway deploy, and address the two launch-blockers before the 25 Jun launch.
 
+### Session — 2026-06-22 (Day 6 telemetry + dashboard, Claude Opus 4.7)
+
+**Did (telemetry + dashboard, verified against live Supabase):**
+- `src/telemetry/events.js#logEvent` — fire-and-forget event logger → Postgres. Never awaited from the hot path, internal try/catch (a DB failure can't break a reply), validates against the frozen `EVENT_NAMES` taxonomy, no-ops under `NODE_ENV=test`.
+- `src/store/postgres.js` — `upsertUser(phoneHash, fields)` (upsert by hash, bumps `last_active_at`, carries `{ paid: true }` on payment), `insertEvent`, and `fetchMetrics()` (bounded events pull folded in JS — funnel, conversion, edits, avg ATS, today, recent feed).
+- Wired `logEvent` into `router.js` (session_started, resume_delivered+ats, payment_link_created, edit_requested+phase) and `fulfill.js` (payment_succeeded+`paid:true`, clean_pdf_delivered).
+- `GET /admin/metrics` (basic-auth) — server-rendered HTML dashboard; no client JS, values escaped.
+- `.runtime/verify-telemetry.js` (throwaway, NOT in the suite — it writes to the real DB): emits a full funnel for a random hash, reads it back via `fetchMetrics`, asserts, proves `NODE_ENV=test` suppresses writes (via a child booted under that env), then deletes the test rows. 12/12.
+- `.runtime/check.js` now spawns every suite with `NODE_ENV=test` so the regression run never pollutes the live `users`/`events` tables. Full `npm run check` 6/6 green (181s).
+
+**Surprises:**
+- First full `npm run check` after the change failed 3 LLM-heavy suites at once — looked alarming, but each passed standalone; it was the documented back-to-back LLM/Puppeteer flake, not a telemetry regression. Re-run was clean.
+- `config.NODE_ENV` is frozen at module load, so mutating `process.env.NODE_ENV` mid-process can't flip the telemetry guard — the test for it has to spawn a child booted under `NODE_ENV=test` (mirrors how `check.js` and production set it).
+
+**Decisions made (also in README Decisions log):**
+- Telemetry is fire-and-forget and test-gated; the telemetry verification deliberately stays OUT of the pre-commit suite so `npm run check` has zero side effects on the live dashboard.
+- Funnel revenue/conversion derived from `events` (payment_succeeded × ₹49), not the `payments` table — that table stays unpopulated at prototype scale; the session/events are the source of truth.
+
+**Open strategy shift (see §4 — Twilio → Meta Cloud API):** Meet's 100-student run is a FREE pilot to validate flow/output (no payments). Leaving the Twilio sandbox costs $20 (upgrade fee) and the sandbox's per-student `join <code>` step is unacceptable friction for 100 testers. Evaluating a move to Meta WhatsApp Cloud API (no join code on a registered number, no BSP markup). Telemetry/dashboard is messaging-agnostic and unaffected.
+
+**Next session:** decide + (if approved) plan the Twilio→Meta Cloud API migration; then Railway deploy + dry run.
+
 ## 4. Open questions for Meet
 
 Carry these forward each session until resolved. Add new ones whenever a build decision needs Meet's input.
@@ -218,6 +240,7 @@ Carry these forward each session until resolved. Add new ones whenever a build d
 - [x] **Upstash Redis** — Mumbai regional instance, TLS URL with `rediss://`, full round-trip verified. Password rotated once after a UI mishap.
 - [x] **Razorpay test mode** — keys + webhook secret in `.env`. Test Payment Link creation verified; HMAC verifier proven correct.
 - [ ] **🚩 LAUNCH-BLOCKER — Razorpay live KYC + UPI.** Meet to submit PAN/Aadhaar/bank in dashboard (2-4 day review). **Critical:** UPI is the only method our students use, and UPI is unavailable until the account is **activated** — and it does NOT reliably render in **test mode** at all (verified 2026-06-22 live e2e: card worked, UPI option simply absent on checkout). Our code restricts no methods; this is purely account/dashboard config. Path to launch: complete KYC → UPI enables in **live** mode → swap `rzp_test_*` → `rzp_live_*` keys + fresh live webhook secret in `.env` → re-verify a real ₹49 UPI payment before 25 Jun. Do NOT burn time chasing test-mode UPI.
+- [ ] **🚩 PILOT-BLOCKER — Twilio sandbox `join <code>` friction (100-student pilot).** The 100-student run is a **free pilot** to validate the bot's flow/output — **no payments**, so a real branded number isn't urgent. The blocker is the **Twilio sandbox `join <code>` step**: every student must first message the join code to a shared US number — unacceptable friction at 100 testers. Leaving the sandbox to a real Twilio sender costs a **$20 upgrade fee** Meet doesn't want to spend pre-validation. **Candidate fix: migrate Twilio → Meta WhatsApp Cloud API.** No BSP markup, free to start; a *registered* number has **no join code** (the Meta *test* number is dev-only, capped at ≤5 recipients). Cost is on our side: inbound must change from **sync TwiML reply** → **200-ack + async Graph API send** (`src/routes/twilio.js`, `src/messaging/twilio.js`); the post-payment path is already async so it maps cleanly. Needs a dedicated phone number (not on WhatsApp) + new env vars (token/phone-number-id/verify-token/app-secret) + GET verify-challenge + X-Hub-Signature-256 HMAC. Business verification / display-name polish can wait until the paid scale-up. **Decision pending: migrate now (pre-launch = cheapest time) vs. pay Twilio $20.**
 - [ ] **🚩 LAUNCH-BLOCKER — WhatsApp Business sender ("Bharat Resume" branding).** We currently run on the **Twilio Sandbox**: shared test number, students must `join <code>` first, 50 msg/day cap, 24h window, no branding. Students will only see **"Bharat Resume"** as the sender after migrating to a registered WhatsApp Business sender. Path: (1) Meta Business Manager + **Business Verification** (PAN/registration docs — slow gate, ~few days, same shape as Razorpay KYC); (2) a **dedicated phone number** not tied to any personal WhatsApp; (3) register the Sender in Twilio (links number → Meta WABA); (4) set WhatsApp display name "Bharat Resume" → Meta approves → name shows. Green verified badge = separate higher bar (Official Business Account, volume-gated) — NOT needed for launch. (5) Message **templates** needed for outbound sends outside the 24h window; the post-payment PDF push inside 24h works as-is today. Code impact is tiny: swap the sandbox `from` for the registered sender in `.env`; `src/messaging/twilio.js` unchanged. **Parallelize with the Razorpay KYC — both have multi-day vendor lead times; start both now for the 25 Jun date.**
 - [ ] **🚩 LAUNCH-BLOCKER — webhook timeout vs. sync fulfillment.** Verified 2026-06-22: the `payment_link.paid` handler runs clean-PDF generation inline (~5.7s), exceeding Razorpay's ~5s webhook timeout. Razorpay aborts the first attempt and retries; fulfillment still completes on attempt 1 and the retry correctly dedupes (no double-send), so students ARE served — but every payment shows "failed then retried" in Razorpay's dashboard, which is noisy and fragile. Fix before launch: ack `200` immediately, run fulfilment async (enqueue or fire-and-forget after responding). Track as Day 5.3/hardening.
 - [x] **Day 2 voice / variants** — Hinglish + English only (Latin script). 3–5 variants per state. Saathi tone confirmed acceptable.

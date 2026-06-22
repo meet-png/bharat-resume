@@ -1,5 +1,14 @@
 // Event logger → Postgres `events` table. PRD §13.2 taxonomy.
-// TODO Day 6: insert { user_id, event_name, state_at_event, payload, created_at }.
+//
+// Fire-and-forget by contract: logEvent NEVER throws into its caller and NEVER
+// blocks a reply — call it without awaiting from the hot path. Any DB failure is
+// logged and swallowed so telemetry can never break a student's flow.
+//
+// Disabled under NODE_ENV=test so the regression suite doesn't pollute the real
+// users/events tables (and the live admin dashboard).
+const { config } = require('../config');
+const logger = require('../logger');
+const { upsertUser, insertEvent } = require('../store/postgres');
 
 const EVENT_NAMES = Object.freeze([
   'session_started',
@@ -17,9 +26,21 @@ const EVENT_NAMES = Object.freeze([
   'session_ended',
   'feedback_apply',
 ]);
+const EVENT_SET = new Set(EVENT_NAMES);
 
-async function logEvent(_args) {
-  throw new Error('logEvent not implemented (Day 6)');
+async function logEvent({ phoneHash, eventName, state = null, payload = null, userFields = {} } = {}) {
+  if (config.NODE_ENV === 'test') return;
+  if (!phoneHash || !EVENT_SET.has(eventName)) {
+    logger.warn({ eventName, hasHash: !!phoneHash }, 'logEvent: missing phoneHash or unknown event — skipped');
+    return;
+  }
+  try {
+    const userId = await upsertUser(phoneHash, userFields);
+    await insertEvent({ userId, eventName, state, payload });
+  } catch (e) {
+    // Non-fatal: telemetry must never break the conversation.
+    logger.error({ err: e.message, eventName }, 'logEvent failed (non-fatal)');
+  }
 }
 
 module.exports = { logEvent, EVENT_NAMES };

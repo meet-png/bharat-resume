@@ -6,6 +6,7 @@ const { getSession, setSession, markPaymentProcessed, unmarkPaymentProcessed } =
 const { deliverPdf } = require('../state/delivery');
 const { sendWhatsApp } = require('../messaging/twilio');
 const { STATES } = require('../state/states');
+const { logEvent } = require('../telemetry/events');
 const logger = require('../logger');
 
 const PAID_MESSAGE = 'Payment received ✓ Yeh raha aapka clean, ATS-readable resume — ab Naukri/LinkedIn sab isse properly parse karenge. Koi change chahiye? Type "edit" — aapke paas 3 edits hain. All the best! 🎉';
@@ -55,6 +56,7 @@ async function fulfillPayment({ phoneHash, paymentId, linkId }, deps = {}) {
     session.razorpay_payment_id = paymentId;
     session.razorpay_payment_link_id = linkId || session.razorpay_payment_link_id;
     await setSession(phoneHash, session);
+    logEvent({ phoneHash, eventName: 'payment_succeeded', state: session.state, payload: { amount: 49 }, userFields: { paid: true } });
 
     if (!session.phone_from) {
       // No address to deliver to; a retry won't help until the student messages
@@ -76,6 +78,7 @@ async function fulfillPayment({ phoneHash, paymentId, linkId }, deps = {}) {
     // Delivered — only now mark the conversation complete.
     session.state = STATES.PAID_COMPLETE;
     await setSession(phoneHash, session);
+    logEvent({ phoneHash, eventName: 'clean_pdf_delivered', state: STATES.PAID_COMPLETE });
     return { ok: true, sent: true };
   } catch (e) {
     // Delivery failure — release the lock so Razorpay's retry re-attempts.
