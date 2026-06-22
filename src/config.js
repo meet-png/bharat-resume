@@ -50,12 +50,24 @@ const schema = z.object({
   // budget without paying. For the free JECRC pilot where we validate output
   // quality, not conversion. Off by default — the paid flow is untouched.
   PILOT_MODE: z.preprocess((v) => v === 'true' || v === true, z.boolean().default(false)),
+
+  // Secret pepper for phone-number hashing (src/security/hash.js). Without it a
+  // leaked sha256(phone) is brute-forceable back to the number. Set a long
+  // random value in production. Optional so dev still boots; a missing value in
+  // production is warned about loudly below.
+  PHONE_HASH_SECRET: z.preprocess(emptyAsUndefined, z.string().min(16).optional()),
 });
 
 const parsed = schema.safeParse(process.env);
 if (!parsed.success) {
   console.error('Invalid env vars:', parsed.error.flatten().fieldErrors);
   process.exit(1);
+}
+
+// Loud warning (not a hard fail, to avoid bricking a deploy) when the phone-hash
+// pepper is missing in production — without it, leaked phone hashes are reversible.
+if (parsed.data.NODE_ENV === 'production' && !parsed.data.PHONE_HASH_SECRET) {
+  console.warn('[security] PHONE_HASH_SECRET is not set in production — phone hashes are brute-forceable. Set a long random value.');
 }
 
 module.exports = { config: parsed.data };

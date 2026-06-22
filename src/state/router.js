@@ -105,7 +105,13 @@ async function startPayment(session, phoneHash) {
     logEvent({ phoneHash, eventName: 'payment_link_created', state: STATES.AWAITING_PAYMENT, payload: { amount: 49 } });
     return pickMessage('paymentLink', { url: link.short_url });
   } catch (e) {
-    logger.error({ err: e.message }, 'createPaymentLink failed');
+    // Razorpay SDK errors carry no `.message`; the reason lives in
+    // e.statusCode / e.error.{code,description}. Capture both so prod failures
+    // are diagnosable (e.g. 429 test-mode quota, auth, or link-config issues).
+    logger.error(
+      { err: e.message, statusCode: e.statusCode, rzpCode: e.error && e.error.code, rzpDesc: e.error && e.error.description },
+      'createPaymentLink failed',
+    );
     return pickMessage('paymentLinkFailed');
   }
 }

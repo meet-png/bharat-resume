@@ -2,8 +2,17 @@
 // Cache by sha256(url) in Redis for 24h (PRD §8.4) — Naukri JDs don't change
 // daily and re-scraping risks rate-limit blocks.
 const crypto = require('crypto');
+const net = require('net');
 const { getClient } = require('../store/redis');
+const { assertFetchableUrl, isPrivateIp } = require('../security/ssrf');
 const logger = require('../logger');
+
+// True only when the host is an IP *literal* in a private range. Hostnames
+// (already DNS-validated for the main navigation) return false here — we don't
+// re-resolve every sub-request synchronously inside the interceptor.
+function net_isIpLiteralPrivate(host) {
+  return net.isIP(host) !== 0 && isPrivateIp(host);
+}
 
 const CACHE_TTL_SEC = 24 * 60 * 60;
 const PAGE_TIMEOUT_MS = 12000;
@@ -40,6 +49,16 @@ async function getBrowser() {
 }
 
 async function scrapeNaukri(url) {
+  // SSRF guard: https-only, no private/loopback/link-local/metadata targets.
+  // A bad URL is treated like a failed scrape — the caller degrades to the
+  // role/JD-text path, so the student is never blocked, just not scraped.
+  try {
+    await assertFetchableUrl(url);
+  } catch (e) {
+    logger.warn({ url, err: e.message }, 'naukri scrape: URL rejected by SSRF guard');
+    return null;
+  }
+
   const cacheKey = `jd:${crypto.createHash('sha256').update(url).digest('hex')}`;
   const redis = getClient();
 
@@ -57,6 +76,23 @@ async function scrapeNaukri(url) {
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36');
     await page.setViewport({ width: 1366, height: 800 });
     await page.setExtraHTTPHeaders({ 'Accept-Language': 'en-IN,en;q=0.9' });
+
+    // Second SSRF layer: abort any request (the navigation, a redirect, or a
+    // sub-resource) that targets a non-https scheme or a private-IP literal.
+    // Closes redirect-to-internal and DNS-rebinding-via-literal vectors that
+    // the pre-flight DNS check alone can't see.
+    await page.setRequestInterception(true);
+    page.on('request', (reqI) => {
+      try {
+        const ru = new URL(reqI.url());
+        if (ru.protocol !== 'https:') return reqI.abort();
+        const h = ru.hostname.replace(/^\[|\]$/g, '');
+        if (net_isIpLiteralPrivate(h)) return reqI.abort();
+        return reqI.continue();
+      } catch {
+        return reqI.abort();
+      }
+    });
 
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: PAGE_TIMEOUT_MS });
 

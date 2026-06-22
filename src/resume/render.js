@@ -30,6 +30,17 @@ function mdBold(s) {
 
 function safeArray(a) { return Array.isArray(a) ? a : []; }
 
+// Only allow http(s)/mailto in hrefs. Blocks javascript:/data:/file: schemes
+// that could ride along in a user-supplied link. Returns the RAW validated URL
+// (callers escape for their context) or '' if the scheme isn't allowed.
+function safeUrl(raw) {
+  const s = String(raw == null ? '' : raw).trim();
+  if (/^https?:\/\//i.test(s) || /^mailto:/i.test(s)) return s;
+  // Bare domain like "linkedin.com/in/x" → assume https.
+  if (/^[a-z0-9.-]+\.[a-z]{2,}(\/|$)/i.test(s)) return 'https://' + s;
+  return '';
+}
+
 // Bucket labels — adapt to what the role context shaped. For the v1 prototype
 // we keep the 5 generic labels but use clean title-case names that read well
 // in the template-reference.md style.
@@ -47,9 +58,10 @@ function buildContactHtml(r) {
   const parts = [];
   if (r.email) parts.push(escapeHtml(r.email));
   if (r.phone) parts.push(escapeHtml(r.phone));
-  if (r.linkedin) parts.push(`<a href="${escapeHtml(r.linkedin)}">LinkedIn</a>`);
-  if (r.github)   parts.push(`<a href="${escapeHtml(r.github)}">GitHub</a>`);
-  if (r.leetcode) parts.push(`<a href="${escapeHtml(r.leetcode)}">LeetCode</a>`);
+  const link = (raw, label) => { const u = safeUrl(raw); return u ? `<a href="${escapeHtml(u)}">${label}</a>` : escapeHtml(label); };
+  if (r.linkedin) parts.push(link(r.linkedin, 'LinkedIn'));
+  if (r.github)   parts.push(link(r.github, 'GitHub'));
+  if (r.leetcode) parts.push(link(r.leetcode, 'LeetCode'));
   return parts.join('<span class="sep">|</span>');
 }
 
@@ -95,7 +107,7 @@ function prepResume(r0) {
   const projects = safeArray(r.projects).map((p) => ({
     name:           escapeHtml(p.name || ''),
     dates:          escapeHtml(p.dates || ''),
-    github_url:     p.github_url ? escapeHtml(p.github_url) : '',
+    github_url:     safeUrl(p.github_url),
     tech_stack_str: safeArray(p.tech_stack).map(escapeHtml).join(' · '),
     bullets:        safeArray(p.bullets).map(mdBold),
   }));
@@ -109,7 +121,7 @@ function prepResume(r0) {
 
   const certifications = safeArray(r.certifications).map((c) => ({
     name:   escapeHtml(c.name || ''),
-    url:    c.url ? escapeHtml(c.url) : '',
+    url:    safeUrl(c.url),
     issuer: c.issuer ? escapeHtml(c.issuer) : '',
     date:   c.date ? escapeHtml(c.date) : '',
   }));
