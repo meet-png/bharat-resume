@@ -35,3 +35,7 @@ tmp/
 
 # Puppeteer cached browsers (downloaded into ~/.cache, but local override possible)
 .puppeteer-cache/
+
+# Real resume samples used locally to design role archetypes / templates.
+# These contain PII (names, phone, email) — NEVER commit them to the public repo.
+docs/resume-samples/

@@ -49,6 +49,13 @@ const PROMPTS = {
     "GitHub URL? 'skip' if you don't have one.",
   ],
 
+  [STATES.AWAITING_CODING_PROFILES]: [
+    "Coding profile? LeetCode / Codeforces / CodeChef / HackerRank ka link bhejiye (ek ya zyada) — ya 'skip'.",
+    "Competitive coding profiles? Share your LeetCode / Codeforces / CodeChef / HackerRank link(s), or 'skip'.",
+    "LeetCode / Codeforces / GFG / HackerRank — koi coding profile link ho toh bhej dijiye, warna 'skip'.",
+    "Any coding profiles (LeetCode, Codeforces, CodeChef, HackerRank…)? Drop the link(s) or type 'skip'.",
+  ],
+
   [STATES.AWAITING_EDUCATION]: [
     "Apni padhai ki details bhejiye — degree, college, branch, expected graduation year, sab ek message mein.",
     "Tell me about your degree — course + college + branch + expected year, all in one message.",

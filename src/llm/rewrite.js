@@ -116,6 +116,7 @@ OUTPUT SCHEMA (return JSON only, this exact shape):
   "linkedin": string | null,
   "github": string | null,
   "leetcode": string | null,
+  "coding_profiles": [{ "platform": string, "url": string }],
   "summary": string,
   "education": [{ "degree": string, "college": string, "branch": string | null, "location": string | null, "dates": string | null, "cgpa": string | null, "coursework": string | null }],
   "skills": { "languages": [string], "frameworks": [string], "tools": [string], "databases": [string], "other": [string] },
@@ -132,8 +133,21 @@ Sections the student left empty: keep as empty array (not null, not omitted).`;
 
   const result = await complete({ system, user: 'rewrite the resume now', maxTokens: 2400, temperature: 0.2 });
 
-  if (phoneFrom && result.data) {
-    result.data.phone = String(phoneFrom).replace(/^whatsapp:/i, '').replace(/[^\d+]/g, '');
+  // Contact identifiers are user-provided FACTS, not prose to "improve". The
+  // rewriter is allowed to drop/normalize them, and an LLM silently mutating a
+  // URL (or hallucinating a username) puts a wrong link on someone's resume.
+  // Re-attach them verbatim from the source JSON so the model can never touch
+  // them — name/email/links are deterministic, not generated.
+  if (result.data) {
+    if (resumeJson.name)  result.data.name = resumeJson.name;
+    if (resumeJson.email) result.data.email = resumeJson.email;
+    result.data.linkedin = resumeJson.linkedin || null;
+    result.data.github   = resumeJson.github || null;
+    result.data.leetcode = resumeJson.leetcode || null;
+    result.data.coding_profiles = Array.isArray(resumeJson.coding_profiles) ? resumeJson.coding_profiles : [];
+    if (phoneFrom) {
+      result.data.phone = String(phoneFrom).replace(/^whatsapp:/i, '').replace(/[^\d+]/g, '');
+    }
   }
 
   return result;

@@ -42,6 +42,19 @@ ONLY set name=null and ask a clarification if the input is clearly NOT a name: a
     merge: (rj, x) => { rj.github = x.github || null; },
   },
 
+  // Competitive-programming / coding profiles. Optional, multi-platform.
+  AWAITING_CODING_PROFILES: {
+    instruction: `Extract competitive-programming / coding-practice profile links the student lists. Common platforms: LeetCode, Codeforces, CodeChef, HackerRank, HackerEarth, GeeksforGeeks (GFG), AtCoder, TopCoder, Kaggle, Codewars.
+
+For each link the student gives, output { "platform": <clean platform name>, "url": <full https URL> }:
+- Normalize bare domains/usernames to a full https URL (e.g. "leetcode.com/u/aditya" → "https://leetcode.com/u/aditya").
+- Derive "platform" from the domain ("leetcode.com" → "LeetCode", "codeforces.com" → "Codeforces", "geeksforgeeks.org" → "GeeksforGeeks"). If a student names a platform but the URL is ambiguous, use the named platform.
+- A student may give several — return all of them.
+- If the message is "skip", empty, or contains no recognizable coding-profile link, return an empty array. Do NOT invent or guess a profile URL, and do NOT ask follow-up questions here — this step is optional.`,
+    shape: '{ "coding_profiles": [{ "platform": string, "url": string }], "clarification_needed": string | null }',
+    merge: (rj, x) => { rj.coding_profiles = Array.isArray(x.coding_profiles) ? x.coding_profiles : []; },
+  },
+
   AWAITING_EDUCATION: {
     instruction: 'Extract degree, college name, branch/major, and expected year of passing. Examples: degree "B.Tech" or "BCA" or "B.E."; branch "Computer Science", "Mechanical"; year "2026" or "Expected 2026". Use null for any field not stated. Do not invent.',
     shape: '{ "education": { "degree": string | null, "college": string | null, "branch": string | null, "expected_year": string | null }, "clarification_needed": string | null }',

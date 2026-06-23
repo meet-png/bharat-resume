@@ -61,6 +61,11 @@ function buildContactHtml(r) {
   const link = (raw, label) => { const u = safeUrl(raw); return u ? `<a href="${escapeHtml(u)}">${label}</a>` : escapeHtml(label); };
   if (r.linkedin) parts.push(link(r.linkedin, 'LinkedIn'));
   if (r.github)   parts.push(link(r.github, 'GitHub'));
+  // Competitive-coding profiles — one link per platform, labelled by platform.
+  for (const cp of safeArray(r.coding_profiles)) {
+    if (cp && cp.url) parts.push(link(cp.url, escapeHtml(cp.platform || 'Coding')));
+  }
+  // Back-compat: a bare single `leetcode` field still renders if present.
   if (r.leetcode) parts.push(link(r.leetcode, 'LeetCode'));
   return parts.join('<span class="sep">|</span>');
 }
