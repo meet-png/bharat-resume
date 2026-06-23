@@ -533,26 +533,58 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
     return genReply || pickPrompt(session.state, session);
   }
 
-  // --- AWAITING_CERTS: dedicated handler with a deterministic link follow-up. ---
+  // --- AWAITING_CERTS: multi-item with per-cert link follow-up + "more or done?" loop. ---
   // A cert without a verification URL is a dangling, unverifiable claim. The LLM
-  // instruction asks for the link but isn't reliable (it sometimes accepts a
-  // bare name silently), so we backstop it: if a cert arrives without a URL and
-  // the student didn't decline, ask ONCE for the link with a clear skip fallback.
+  // sometimes captures only the first cert from a multi-line message and
+  // sometimes accepts a bare name silently, so we backstop both: (1) ask for the
+  // link of EVERY missing-URL cert one-by-one (not just the first), (2) after
+  // all links resolve, mirror the projects "add another, or 'done'?" loop so
+  // students can stack certs naturally instead of being forced into the next
+  // state on the first one.
   if (current === STATES.AWAITING_CERTS) {
-    // Resolve a link we asked for on the previous turn.
+    // (1) Resolve a link asked for last turn, for a SPECIFIC named cert.
     if (session.cert_link_pending) {
-      session.cert_link_pending = false;
-      if (!SKIP_RE.test(trimmed) && !NOLINK_RE.test(trimmed)) {
-        const m = trimmed.match(URL_IN_TEXT_RE);
-        const target = (session.resume_json.certifications || []).find((c) => c && !c.url);
-        if (m && target) target.url = m[0];
+      const targetName = session.cert_link_pending;
+      session.cert_link_pending = null;
+      const target = (session.resume_json.certifications || []).find((c) => c && c.name === targetName);
+      if (target) {
+        if (SKIP_RE.test(trimmed) || NOLINK_RE.test(trimmed)) {
+          target._link_skipped = true;
+        } else {
+          const m = trimmed.match(URL_IN_TEXT_RE);
+          if (m) target.url = m[0];
+          else target._link_skipped = true; // reply wasn't a URL — treat as no-link rather than loop forever
+        }
       }
-      session.state = NEXT_STATE[current];
-      const genReply = await tryGenerate(session, phoneFrom, phoneHash);
+      // More missing-link certs from the same batch? Ask the next one's link.
+      const next = (session.resume_json.certifications || []).find((c) => c && c.name && !c.url && !c._link_skipped);
+      if (next) {
+        session.cert_link_pending = next.name;
+        await setSession(phoneHash, session);
+        return `Got it. Verification link for '${next.name}'? 'skip' agar nahi hai.`;
+      }
+      // All links resolved → enter the "add another or done?" loop.
+      session.certs_more_pending = true;
       await setSession(phoneHash, session);
-      return genReply || pickPrompt(session.state, session);
+      const n = (session.resume_json.certifications || []).length;
+      return `${n} cert${n > 1 ? 's' : ''} saved ✓ — agla cert bhejo, ya 'done' likho.`;
     }
 
+    // (2) "Add another or 'done'?" pending. DONE/SKIP advances; otherwise treat
+    //     this message as additional cert(s) and fall through to extraction.
+    if (session.certs_more_pending) {
+      if (DONE_RE.test(trimmed) || SKIP_RE.test(trimmed)) {
+        session.certs_more_pending = false;
+        session.state = NEXT_STATE[current];
+        const genReply = await tryGenerate(session, phoneFrom, phoneHash);
+        await setSession(phoneHash, session);
+        return genReply || pickPrompt(session.state, session);
+      }
+      session.certs_more_pending = false;
+      // fall through to extraction below
+    }
+
+    // (3) First-entry skip: no certs at all.
     if (SKIP_RE.test(trimmed)) {
       session.state = NEXT_STATE[current];
       const genReply = await tryGenerate(session, phoneFrom, phoneHash);
@@ -560,6 +592,8 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
       return genReply || pickPrompt(session.state, session);
     }
 
+    // (4) Extract certs from this message. The extractor returns an ARRAY so a
+    //     multi-line / numbered / comma-separated message yields multiple certs.
     let data, usage;
     try {
       ({ data, usage } = await extractSection({ state: current, body: trimmed, resumeJson: session.resume_json, session }));
@@ -567,15 +601,22 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
       logger.error({ err: e.message, status: e.status, code: e.code, state: current, bodyLen: trimmed.length }, 'extract failed');
       return pickMessage('serverError');
     }
-    logger.info({ phoneHash: phoneShort, state: current, usage }, 'extracted');
+    logger.info({ phoneHash: phoneShort, state: current, usage, newCerts: Array.isArray(data && data.certifications) ? data.certifications.length : 0 }, 'extracted');
     SECTION_CONFIG[current].merge(session.resume_json, data);
 
-    // Deterministic guard: first cert with a name but no URL, and the student
-    // didn't decline → ask once for the link. Skip-friendly for the many real
-    // professional certs (Bar Council, CA, etc.) without a public verify URL.
-    const missingLink = (session.resume_json.certifications || []).find((c) => c && c.name && !c.url);
-    if (missingLink && !NOLINK_RE.test(trimmed)) {
-      session.cert_link_pending = true;
+    // If the student declared "no link" in the SAME message (e.g. "NPTEL DBMS,
+    // no link"), mark every newly-added missing-URL cert as skipped so we don't
+    // ask. Applies to all currently missing-link certs (the merge just added them).
+    if (NOLINK_RE.test(trimmed)) {
+      for (const c of (session.resume_json.certifications || [])) {
+        if (c && c.name && !c.url) c._link_skipped = true;
+      }
+    }
+
+    // (5) Loop: ask for the FIRST cert still missing a link.
+    const missingLink = (session.resume_json.certifications || []).find((c) => c && c.name && !c.url && !c._link_skipped);
+    if (missingLink) {
+      session.cert_link_pending = missingLink.name;
       await setSession(phoneHash, session);
       return `Got it — '${missingLink.name}'. Verification link bhej dijiye (Coursera / NPTEL / official URL)? 'skip' agar nahi hai.`;
     }
@@ -585,10 +626,11 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
       return data.clarification_needed;
     }
 
-    session.state = NEXT_STATE[current];
-    const genReply = await tryGenerate(session, phoneFrom, phoneHash);
+    // (6) Every cert in this batch had a URL (or was declined) → "more or done?".
+    session.certs_more_pending = true;
     await setSession(phoneHash, session);
-    return genReply || pickPrompt(session.state, session);
+    const n = (session.resume_json.certifications || []).length;
+    return `${n} cert${n > 1 ? 's' : ''} saved ✓ — agla cert bhejo, ya 'done' likho.`;
   }
 
   // --- General Phase 2 collection. ---

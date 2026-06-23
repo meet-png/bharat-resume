@@ -188,6 +188,16 @@ Apply same role-awareness as before: clarification vocabulary, action verbs, exa
   AWAITING_PROJECTS: {
     instruction: `Extract ONE project per message. tech_stack = whatever tools/tech/methods/platforms the student used (works for tech AND non-tech roles).
 
+PRE-CHECK BEFORE ASKING ANYTHING — STOP ASKING FOR DETAIL THE STUDENT ALREADY GAVE:
+Before you set clarification_needed, look at resume_json.pending_project — it accumulates across turns. If pending_project.bullets ALREADY contain ≥2 distinct numbers/metrics (row counts like "12,828 rows", percentages like "-8.0% correction" or "87% accuracy", currency like "₹18,310 Cr → ₹4,711 Cr", validation counts like "20/20 checks", table counts like "8-table schema", users/scale/latency/throughput) AND a link is sorted (github_url, demo_url, or _link_declined), the project is SUFFICIENT — set clarification_needed = null. Do NOT ask for "a quantifiable outcome" when several are already present. This is the single most important rule: the student notices instantly when the bot ignores detail they already gave.
+
+DEFLECTION HANDLING (Hindi/English):
+If the student replies with a deflection meaning "I already told you" — patterns include "upar dediya", "pehle bola", "already said", "already mentioned", "mentioned above", "see above", "check above", "ek baar bata diya", "bola na", "I told you", "pehle hi bola" — DO NOT ask CASE A ("what did you build") or CASE D again. Re-evaluate pending_project.bullets per the PRE-CHECK above. If a metric is there, accept and set clarification_needed = null. If genuinely nothing quantitative is in pending_project, ask ONCE for a specific metric naming what you can already see ("Aapne <X> kaha tha — uska number kya tha?"), never a generic "what did you build?".
+
+EXTRACTION DENSITY — DO NOT COMPRESS RICH MESSAGES:
+When a single message contains MULTIPLE distinct quantifiable facts (e.g. "12,828 rows, 8-table schema, 20/20 validation, -8.0% correction, ₹18K Cr → ₹4.7K Cr"), extract EACH as its own bullet in the bullets array, preserving the exact numbers. Do NOT merge them into one summary line that loses metrics. Five facts → five bullets (the rewriter will compress later if needed; your job is to capture them all).
+
+
 LIBERAL NAME EXTRACTION:
 Any noun phrase from what the student made counts as a valid project name. Title-case it. Examples:
 - "Made a project on sales prediction" → name = "Sales Prediction"
@@ -390,6 +400,14 @@ Rules:
 - url = the verification URL (Coursera / NPTEL / Udemy / Credly / AWS / etc.). If the student didn't share one, url = null.
 - Return an ARRAY — one or many from a single message.
 - Do NOT extract or invent issuer/date as separate fields. The URL contains that info implicitly; the rendered resume will be a hyperlink (name as visible text, url as link).
+
+CRITICAL — MULTI-ITEM IN ONE MESSAGE: a single message frequently contains MULTIPLE certifications. You MUST extract EVERY cert you can identify — never drop one because it was on line 2 instead of line 1. Recognize all of these as separate entries:
+  • Newline-separated:           "Neural Networks & Deep Learning
+                                  Introduction to AI, Data Science & Ethics"   → 2 certs
+  • Comma- or "and"-separated:   "Deep Learning Specialization, NPTEL DBMS, and AWS CCP"   → 3 certs
+  • Numbered / bulleted:         "1) Deep Learning  2) NPTEL DBMS  3) AWS CCP"   → 3 certs
+  • Mixed (name + URL pairs):    "Deep Learning — coursera.org/x  ;  NPTEL DBMS — nptel.in/y"   → 2 certs, each with its URL
+NEVER drop a cert because it lacks a URL — capture { name, url: null } for each one. The router will follow up for missing links one-by-one.
 
 Sufficiency check:
 - If EVERY cert in the new message has either a url OR the student explicitly said "no link"/"skip link"/"private" → clarification_needed = null.
