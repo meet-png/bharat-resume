@@ -61,7 +61,9 @@ async function runGeneration(session, phoneFrom) {
         jdGeneric: session.jd_generic,
         phoneFrom,
       }),
-      30000,
+      60000, // 30s → 60s on 2026-06-23: client.js now retries once on transient
+             // transport errors (ERR_STREAM_PREMATURE_CLOSE et al). A 27s first
+             // attempt + 500ms backoff + ~27s retry needs ~55s headroom.
       { data: null, usage: null },
       'rewrite'
     ),
