@@ -22,6 +22,11 @@ function unlocked(session) {
 
 const SKIP_RE = /^\s*(skip|no|nahi|nahin|nope|none|nothing|na|n\/a|kuch nahi|no thanks)\s*$/i;
 const DONE_RE = /^\s*(done|finish|finished|bas|over|complete)\s*$/i;
+// Student explicitly declining to share a cert verification link.
+const NOLINK_RE = /\b(no link|skip link|nolink|no url|without link|no verification|link nahi|nahi link|link nahin|private)\b/i;
+// A URL or bare domain (with path) anywhere in the message — used to pull a
+// verification link out of a free-text cert reply.
+const URL_IN_TEXT_RE = /(https?:\/\/\S+|[a-z0-9.-]+\.[a-z]{2,}\/\S*)/i;
 const YES_RE = /^\s*(haan|han|yes|y|ready|chalo|chaliye|let'?s go|start|sure|ok|okay|yup|yeah)\s*$/i;
 const JD_GENERIC_RE = /^\s*(no specific role|no specific|no role|generic|any role|any job|don'?t have|nothing specific|skip|no|nahi|nope|none|nothing)\s*$/i;
 const JD_MARKER_RE = /\b(responsibilit|requirement|qualification|years? of experience|must have|nice to have|we are looking|about (the )?role|about us|key skills|preferred|location:|experience:|salary|stipend|ctc|notice period)/i;
@@ -514,6 +519,64 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
     }
 
     // 3. Sufficient (or bullet safety cap hit) → advance + generate.
+    session.state = NEXT_STATE[current];
+    const genReply = await tryGenerate(session, phoneFrom, phoneHash);
+    await setSession(phoneHash, session);
+    return genReply || pickPrompt(session.state, session);
+  }
+
+  // --- AWAITING_CERTS: dedicated handler with a deterministic link follow-up. ---
+  // A cert without a verification URL is a dangling, unverifiable claim. The LLM
+  // instruction asks for the link but isn't reliable (it sometimes accepts a
+  // bare name silently), so we backstop it: if a cert arrives without a URL and
+  // the student didn't decline, ask ONCE for the link with a clear skip fallback.
+  if (current === STATES.AWAITING_CERTS) {
+    // Resolve a link we asked for on the previous turn.
+    if (session.cert_link_pending) {
+      session.cert_link_pending = false;
+      if (!SKIP_RE.test(trimmed) && !NOLINK_RE.test(trimmed)) {
+        const m = trimmed.match(URL_IN_TEXT_RE);
+        const target = (session.resume_json.certifications || []).find((c) => c && !c.url);
+        if (m && target) target.url = m[0];
+      }
+      session.state = NEXT_STATE[current];
+      const genReply = await tryGenerate(session, phoneFrom, phoneHash);
+      await setSession(phoneHash, session);
+      return genReply || pickPrompt(session.state, session);
+    }
+
+    if (SKIP_RE.test(trimmed)) {
+      session.state = NEXT_STATE[current];
+      const genReply = await tryGenerate(session, phoneFrom, phoneHash);
+      await setSession(phoneHash, session);
+      return genReply || pickPrompt(session.state, session);
+    }
+
+    let data, usage;
+    try {
+      ({ data, usage } = await extractSection({ state: current, body: trimmed, resumeJson: session.resume_json, session }));
+    } catch (e) {
+      logger.error({ err: e.message, status: e.status, code: e.code, state: current, bodyLen: trimmed.length }, 'extract failed');
+      return pickMessage('serverError');
+    }
+    logger.info({ phoneHash: phoneShort, state: current, usage }, 'extracted');
+    SECTION_CONFIG[current].merge(session.resume_json, data);
+
+    // Deterministic guard: first cert with a name but no URL, and the student
+    // didn't decline → ask once for the link. Skip-friendly for the many real
+    // professional certs (Bar Council, CA, etc.) without a public verify URL.
+    const missingLink = (session.resume_json.certifications || []).find((c) => c && c.name && !c.url);
+    if (missingLink && !NOLINK_RE.test(trimmed)) {
+      session.cert_link_pending = true;
+      await setSession(phoneHash, session);
+      return `Got it — '${missingLink.name}'. Verification link bhej dijiye (Coursera / NPTEL / official URL)? 'skip' agar nahi hai.`;
+    }
+
+    if (data.clarification_needed) {
+      await setSession(phoneHash, session);
+      return data.clarification_needed;
+    }
+
     session.state = NEXT_STATE[current];
     const genReply = await tryGenerate(session, phoneFrom, phoneHash);
     await setSession(phoneHash, session);

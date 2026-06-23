@@ -90,12 +90,22 @@ const PROMPTS = {
     ],
   },
 
-  [STATES.AWAITING_COURSEWORK]: [
-    "Koi relevant coursework hai jo highlight karna chahte ho? Jaise DSA, ML, Stats, DBMS, etc. 'skip' if none.",
-    "Any relevant coursework worth highlighting? (DSA, Machine Learning, Statistics, OS, DBMS, etc.) Or 'skip'.",
-    "Coursework jo aapko strong banata ho — DSA, AI, Probability, Networks? List kar dijiye, ya 'skip'.",
-    "Top coursework — kuch jo role ke liye relevant ho. Comma-separated batayiye ya 'skip' if none.",
-  ],
+  // Role-aware. Technical roles get CS-subject examples; everyone else gets a
+  // neutral ask (no misleading DSA/ML/DBMS examples for a law/marketing student).
+  [STATES.AWAITING_COURSEWORK]: {
+    technical: [
+      "Koi relevant coursework hai jo highlight karna chahte ho? Jaise DSA, ML, Stats, DBMS, etc. 'skip' if none.",
+      "Any relevant coursework worth highlighting? (DSA, Machine Learning, Statistics, OS, DBMS, etc.) Or 'skip'.",
+      "Coursework jo aapko strong banata ho — DSA, AI, Probability, Networks? List kar dijiye, ya 'skip'.",
+      "Top coursework — kuch jo role ke liye relevant ho. Comma-separated batayiye ya 'skip' if none.",
+    ],
+    general: [
+      "Koi relevant subjects ya coursework jo aapke field mein important hain? Comma-separated batayiye, ya 'skip' if none.",
+      "Any key subjects or coursework from your field worth highlighting? List them, or 'skip'.",
+      "Apne course ke woh subjects batayiye jo is role ke liye strong hain — ya 'skip' agar koi nahi.",
+      "Relevant coursework / subjects for this role? Comma-separated, ya 'skip' if none.",
+    ],
+  },
 
   // Experience prompt explicitly invites action+impact+tools — primes the LLM
   // sufficiency check that runs in extract.js.

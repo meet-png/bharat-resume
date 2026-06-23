@@ -26,7 +26,7 @@ async function runGeneration(session, phoneFrom) {
 
   if (session.jd_url && !session.jd_text) {
     const tScrape = Date.now();
-    const scraped = await withTimeout(scrapeNaukri(session.jd_url), 7000, null, 'scrape');
+    const scraped = await withTimeout(scrapeNaukri(session.jd_url), 10000, null, 'scrape');
     timings.scrape_ms = Date.now() - tScrape;
     if (scraped) session.jd_text = scraped;
   }
@@ -34,11 +34,19 @@ async function runGeneration(session, phoneFrom) {
   // Parallelize keywords + rewrite. The rewriter uses keywords only as a
   // "match where the student has the skill" hint — not load-bearing. Running
   // both concurrently saves ~3-4s on the critical path (was ~10s before).
+  //
+  // TIMEOUTS: generously sized because the Meta webhook is ASYNC (ack-first —
+  // see routes/whatsapp.js POST: it returns 200 immediately, then processes and
+  // pushes the reply via a separate outbound API call). There is NO synchronous
+  // 15s webhook budget anymore — that was a Twilio TwiML constraint. The old 13s
+  // rewrite ceiling was clipping slow-but-valid rewrites on Railway's CPU
+  // (~10.3s locally → over 13s in prod), producing a null resume and the
+  // user-facing "PDF banane mein dikkat" failure. A resume taking ~20s is fine.
   const tPar = Date.now();
   const [kw, rewritten] = await Promise.all([
     withTimeout(
       extractKeywords({ jdText: session.jd_text, jdRole: session.jd_role, jdGeneric: session.jd_generic }),
-      5500,
+      12000,
       { keywords: [], role_title: 'unknown', experience_level: 'fresher' },
       'keywords'
     ),
@@ -53,11 +61,7 @@ async function runGeneration(session, phoneFrom) {
         jdGeneric: session.jd_generic,
         phoneFrom,
       }),
-      // 13s ceiling (bumped from 11s after observable cold-call flake).
-      // We're parallel with keywords (which usually finishes in 2-4s), so the
-      // critical path is rewrite alone. Render+watermark+upload add ~3-4s,
-      // keeping us inside Twilio's 15s webhook budget on the happy path.
-      13000,
+      30000,
       { data: null, usage: null },
       'rewrite'
     ),
@@ -68,6 +72,13 @@ async function runGeneration(session, phoneFrom) {
   session.jd_experience_level = kw.experience_level;
   session.resume_json_rewritten = rewritten.data;
   session.rewrite_usage = rewritten.usage;
+
+  // Distinct, greppable signal: the rewrite produced no data (LLM timeout or
+  // error). Everything downstream (PDF, preview) will fail from here, so make
+  // this the obvious root-cause line in prod logs rather than a vague PDF error.
+  if (!rewritten.data) {
+    logger.error({ rewriteMs: timings.parallel_ms }, 'rewrite returned null data — resume cannot be generated this run');
+  }
 
   // ATS score — deterministic, local, ~5-10ms. PRD §11.
   if (session.resume_json_rewritten) {
