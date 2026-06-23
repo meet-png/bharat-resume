@@ -29,6 +29,7 @@ ABSOLUTE RULES:
 3. Preserve formatting: bullets are plain strings that keep their \`**bold**\` markdown markers around metrics. Keep that convention on any bullet you add or modify.
 4. If the request is a genuine edit you can apply from given information (rephrase a bullet, fix a typo, change CGPA the student now states, remove a project, reorder skills, shorten the summary), apply it and set clarification_needed = null.
 5. If the request is ambiguous or you cannot tell what to change, return the resume unchanged + a one-line clarification.
+6. PROJECT LINKS: each project has two link fields — "github_url" (a github.com repo) and "demo_url" (a deployed/live URL: *.streamlit.app, *.vercel.app, *.netlify.app, a custom domain, or anything the student calls a "live"/"demo"/"deployed" link). When the student asks to add a link to a project, put it in the CORRECT field by its kind, and KEEP any existing link in the other field (adding a demo link must not erase the github link, and vice versa). Match the project by the name the student references.
 
 CURRENT resume JSON:
 ${JSON.stringify(rewritten)}

@@ -89,17 +89,24 @@ For each link the student gives, output { "platform": <clean platform name>, "ur
   },
 
   AWAITING_SKILLS: {
-    instruction: `Group the listed skills into 3-6 NAMED categories, ordered strongest/most-relevant first. Choose category labels that fit the TARGET ROLE in the JD context above — do NOT use a fixed generic set. This is how strong real resumes do it.
+    instruction: `Group the listed skills into 3-6 NAMED categories, ordered strongest/most-relevant first. The category LABELS must be TAILORED to the SPECIFIC target role/JD above — read what that role emphasizes and name the buckets so a recruiter for THAT role sees their own priorities reflected. Generic, interchangeable labels are a wasted signal; specific ones show focus. This is how strong real resumes do it.
 
-GUIDANCE ON LABELS (pick what fits; invent role-appropriate ones):
-- Software/Backend: "Languages", "Frameworks", "Databases", "Tools / DevOps", "Cloud", "Security & Architecture"
-- Data/AI/ML: "Languages", "ML / AI", "Data & BI", "Databases", "MLOps / Tools"
-- Frontend/Mobile: "Languages", "Frameworks", "Styling / UI", "Tooling", "Testing"
-- Non-tech (if ever): pick domain-native labels (e.g. Marketing → "Channels", "Analytics", "Martech Tools").
+ROLE-TAILORING THE LABELS (this is the important part — do not skip it):
+Start from the JD's focus, then name buckets around it. Prefer a SPECIFIC, role-resonant name over a bland one whenever the skills support it:
+  • Backend / distributed-systems role → "Languages", "Backend & Microservices", "Databases & Caching", "Infra & DevOps", "Messaging & APIs"   (NOT plain "Frameworks" / "Tools")
+  • Data / ML role → "Languages", "ML / Deep Learning", "Data & Analytics", "MLOps & Tooling"
+  • Frontend role → "Languages", "Frameworks & UI", "State & Tooling", "Testing"
+  • Cloud / DevOps role → "Languages & Scripting", "Cloud & Infra", "CI/CD & Containers", "Observability"
+  • Security role → "Languages", "Security & Architecture", "Tooling & Recon", "Cloud & Infra"
+BEFORE → AFTER (what tightening looks like):
+  Backend JD, skills {Spring Boot, Node.js, gRPC, Kafka, Docker, K8s, AWS}
+    weak:   "Frameworks", "Tools", "Cloud"
+    strong: "Backend & Microservices" (Spring Boot, Node.js), "Messaging & APIs" (gRPC, Kafka), "Infra & DevOps" (Docker, K8s, AWS)
+Only fall back to a bland generic set ("Frameworks", "Tools") when the JD is genuinely generic or the skills truly don't cluster around a theme.
 
 HARD RULES ON LABELS:
 - NEVER use the label "Other", "Misc", or "Miscellaneous" — always pick a meaningful, specific category name. If something doesn't fit, name the category for what it IS (e.g. "Concepts", "Methodologies", "Coursework").
-- A label may combine two related areas with "&" or "/" (e.g. "Databases & Streaming", "Tools / DevOps") — this is encouraged when it reads cleanly.
+- A label may combine two related areas with "&" or "/" (e.g. "Databases & Caching", "CI/CD & Containers") — this is encouraged when it reads cleanly.
 - Include EVERY skill the student mentioned; never drop one. Preserve the student's capitalization where reasonable.
 - A category with no items should simply be omitted from the array (don't emit empty categories).
 
@@ -196,7 +203,8 @@ A project is SUFFICIENT only when all four are true:
         SCALE / VOLUME — data points, users, records, requests, dataset size, transactions
         QUALITY        — accuracy %, F1, precision, error rate, NPS, % improvement
         IMPACT         — time saved, cost saved, business outcome, latency, throughput, deployed/shipped
-  (d) github_url OR demo_url is a real URL, OR pending_project._link_declined === true
+  (d) a link is sorted: github_url OR demo_url is a real URL, OR pending_project._link_declined === true.
+      For technical roles we PREFER github_url (we enrich from it — see CASE C), but a demo URL or an explicit decline also satisfies (d) so we never hard-loop a student who only has a live link or a private repo.
 
 GITHUB vs LIVE LINK:
 A github.com repo URL goes in github_url. A DEPLOYED / LIVE / hosted URL (vercel.app, netlify.app, a custom domain, "live link", "deployed at") goes in demo_url. A project may have BOTH — capture each in its own field. For the CASE C link ask below, either a repo link or a live link satisfies requirement (d).
@@ -212,14 +220,14 @@ CASE A — only (a) missing (message has no project content):
 CASE B — (a) present, (b) missing:
   Ask for tech / description. Example: "Kis tech / tool se banaya? Aur kya karta hai project?"
 
-CASE C — (a) and (b) present, (d) missing AND _link_declined NOT true:
+CASE C — (a) and (b) present, github_url missing AND _link_declined NOT true:
   Ask ONLY for a link to the work. NEVER mention impact/accuracy/metric here.
-  Pick the artifact NATIVE to the TARGET ROLE — do NOT default to GitHub for non-technical roles:
-    - Technical role: "GitHub repo link ya deployed URL? 'no link' agar private hai."
+  For TECHNICAL roles (software, data, engineering — this is v1's only audience), the GitHub REPO link is the PRIMARY ask EVERY TIME, because we auto-pull the project's tech, features, and any real numbers straight from the repo so the student doesn't have to describe it all. Ask for github_url even if a demo/deployed URL is already present (a repo and a demo are different things and we enrich from the repo). Tell the student we'll do the work from their repo:
+    - Technical role: "GitHub repo ka link bhej dijiye — main repo se aapke project ki tech, features aur numbers khud nikaal lunga. Deployed/live URL ho to wo bhi. 'no link' agar repo private hai."
+  Pick the artifact NATIVE to the role only for NON-technical roles (not in v1 scope, but kept for safety):
     - Marketing/Content: "Is kaam ka koi link hai — live campaign, published article, ya post? 'no link' agar nahi."
     - Design: "Portfolio / Behance / Dribbble ya live link? 'no link' agar private hai."
     - Sales/Finance/Ops/other: "Koi link ya proof of this work — live page, report, ya deck? 'no link' agar share nahi kar sakte."
-  Only mention GitHub/repo when the TARGET ROLE is clearly technical (software, data, engineering). Otherwise ask for a generic link/proof.
 
 CASE D — link sorted AND <2 bullets OR <2 distinct angles in existing bullets:
   Identify which angle is missing from the existing bullets. Ask ONE targeted question for THAT angle.
@@ -240,6 +248,13 @@ CASE D — link sorted AND <2 bullets OR <2 distinct angles in existing bullets:
     Adapt to any role — pick metrics native to that domain.
 
 CASE E — all four ✓ (≥2 bullets, ≥2 angles, link sorted) → clarification_needed = null.
+
+ENRICHMENT OVERRIDE (applies when GitHub repo data was fetched for this project — see the repo data block in context):
+This is the whole point of asking for the repo — a student often can't describe their own project well, so YOU do the work from the repo:
+  - Author the bullets primarily from the repo: description + README + topics + languages → what it does, the core features, the architecture/approach, plus any REAL numbers present in the README (users, latency, dataset size, accuracy, coverage). Bold real numbers with **…**.
+  - Repo-derived descriptive/feature bullets DO count toward requirement (c). If you have ≥2 solid repo-based bullets, treat (c) as satisfied even without two hard metric angles.
+  - Ask AT MOST ONE metric follow-up to add a number the repo lacked. If the student can't supply one, accept the repo-based bullets and set clarification_needed = null. NEVER loop a student for metrics the repo can't provide and they don't have.
+  - If the student answers CASE C with a deployed/demo URL instead of a repo, or declines, accept it and move on — do not re-ask for GitHub.
 
 WORKED EXAMPLES (study these — they show exactly what to output):
 
@@ -454,7 +469,12 @@ async function extractSection({ state, body, resumeJson, session, focus }) {
   // dramatically improves project extraction quality.
   const repoEnrichment = await maybeEnrichProject(state, body);
   const enrichmentBlock = repoEnrichment
-    ? `\n\nGitHub repo data fetched for this URL (use to fill tech_stack and bullets):\n${JSON.stringify({
+    ? `\n\nGitHub repo data was fetched for the link in this message. This is VERIFIABLE primary-source material from the student's OWN repository — treat its contents as fact you may use to write the resume (this is NOT "inventing"). MINE it thoroughly so the student doesn't have to describe everything:
+- Use description + README to write 2-3 SPECIFIC bullets on WHAT the project does, its core features, and the architecture/approach.
+- Fill tech_stack from languages + topics + frameworks/DBs/infra named in the README.
+- Extract any REAL numbers in the README (users, latency, dataset size, accuracy, test coverage, scale) into bullets, bolded with **…**. If the README has NO numbers, write accurate descriptive feature bullets instead — never fabricate a metric that is not in the repo or the student's own words.
+Repo data:
+${JSON.stringify({
         name: repoEnrichment.name,
         description: repoEnrichment.description,
         languages: repoEnrichment.languages,
