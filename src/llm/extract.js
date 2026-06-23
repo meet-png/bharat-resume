@@ -216,6 +216,7 @@ CLARIFICATION RULES (ask ONLY ONE missing piece per turn):
 
 CASE A — only (a) missing (message has no project content):
   Ask only for what they built. Example: "Kya banaya tha project mein? Naam aur 1-2 lines."
+  CASE A APPLIES ONLY when resume_json.pending_project has NO name yet. If a pending_project WITH a name already exists, the student's message is a FOLLOW-UP to that project (a metric, link, or detail) — merge it and continue from CASE C/D/E; never reset to CASE A.
 
 CASE B — (a) present, (b) missing:
   Ask for tech / description. Example: "Kis tech / tool se banaya? Aur kya karta hai project?"
@@ -249,12 +250,13 @@ CASE D — link sorted AND <2 bullets OR <2 distinct angles in existing bullets:
 
 CASE E — all four ✓ (≥2 bullets, ≥2 angles, link sorted) → clarification_needed = null.
 
-ENRICHMENT OVERRIDE (applies when GitHub repo data was fetched for this project — see the repo data block in context):
-This is the whole point of asking for the repo — a student often can't describe their own project well, so YOU do the work from the repo:
-  - Author the bullets primarily from the repo: description + README + topics + languages → what it does, the core features, the architecture/approach, plus any REAL numbers present in the README (users, latency, dataset size, accuracy, coverage). Bold real numbers with **…**.
-  - Repo-derived descriptive/feature bullets DO count toward requirement (c). If you have ≥2 solid repo-based bullets, treat (c) as satisfied even without two hard metric angles.
-  - Ask AT MOST ONE metric follow-up to add a number the repo lacked. If the student can't supply one, accept the repo-based bullets and set clarification_needed = null. NEVER loop a student for metrics the repo can't provide and they don't have.
-  - If the student answers CASE C with a deployed/demo URL instead of a repo, or declines, accept it and move on — do not re-ask for GitHub.
+ENRICHMENT OVERRIDE (applies when GitHub repo data was fetched for this project):
+The repo is CONTEXT to help you understand and DESCRIBE the project — it is NOT a substitute for the metric bar. Hold projects to the SAME standard as experience: a metric-free project is NOT done.
+  - Use description + README + topics + languages to fill tech_stack and to write the descriptive "what it does / core features" bullet(s). Pull any REAL numbers the README itself contains (stars, downloads, users, benchmarks, latency, accuracy, coverage) into bullets, bolded with **…**.
+  - Repo-derived descriptive bullets DO NOT by themselves satisfy the project. Requirement (c) STILL stands: ≥2 bullets spanning ≥2 distinct metric angles (SCALE / QUALITY / IMPACT). A project described as "a habit tracker with a leaderboard" with no numbers is NOT sufficient — exactly like an experience entry with only an action and no metric is not sufficient.
+  - If the README gave no hard metric, you MUST still ask the student ONCE (CASE D) for a quantifiable outcome native to this project — e.g. "DevHab kitne log use karte hain — daily active users ya signups? Koi performance number, GitHub stars, ya competition result?". Set clarification_needed to that question. Do NOT set it to null on this turn.
+  - ONLY after that one ask: if the student gives a number, add it as a NEW bullet → sufficient. If the student clearly has none ("kuch nahi", "pata nahi", "no numbers", "skip", "none", "abhi koi nahi"), THEN accept the descriptive bullets and set clarification_needed = null. Never push for a metric more than that single time.
+  - If the student answers CASE C with a deployed/demo URL instead of a repo, or declines the link, accept it and move on — do not re-ask for GitHub.
 
 WORKED EXAMPLES (study these — they show exactly what to output):
 
@@ -309,7 +311,16 @@ ROLE-NATIVE METRICS for CASE D — adapt to TARGET ROLE in JD context:
         p.tech_stack = [...set];
       }
       if (Array.isArray(x.project.bullets) && x.project.bullets.length > 0) {
-        p.bullets = (p.bullets || []).concat(x.project.bullets);
+        // Dedupe: on a follow-up turn the LLM often re-emits the existing
+        // descriptive bullets alongside (or instead of) the new one. Append only
+        // genuinely new bullets so a metric turn doesn't duplicate the description.
+        const norm = (s) => String(s).replace(/\*\*/g, '').trim().toLowerCase();
+        p.bullets = p.bullets || [];
+        const seen = new Set(p.bullets.map(norm));
+        for (const b of x.project.bullets) {
+          const n = norm(b);
+          if (n && !seen.has(n)) { p.bullets.push(b); seen.add(n); }
+        }
       }
     },
   },
@@ -470,9 +481,17 @@ async function extractSection({ state, body, resumeJson, session, focus }) {
   const repoEnrichment = await maybeEnrichProject(state, body);
   const enrichmentBlock = repoEnrichment
     ? `\n\nGitHub repo data was fetched for the link in this message. This is VERIFIABLE primary-source material from the student's OWN repository — treat its contents as fact you may use to write the resume (this is NOT "inventing"). MINE it thoroughly so the student doesn't have to describe everything:
-- Use description + README to write 2-3 SPECIFIC bullets on WHAT the project does, its core features, and the architecture/approach.
+- Use description + README to write the descriptive bullet(s) on WHAT the project does, its core features, and the architecture/approach. This is CONTEXT — it does NOT make the project complete on its own.
 - Fill tech_stack from languages + topics + frameworks/DBs/infra named in the README.
-- Extract any REAL numbers in the README (users, latency, dataset size, accuracy, test coverage, scale) into bullets, bolded with **…**. If the README has NO numbers, write accurate descriptive feature bullets instead — never fabricate a metric that is not in the repo or the student's own words.
+- Extract any REAL numbers in the README (users, latency, dataset size, accuracy, test coverage, stars/downloads, scale) into bullets, bolded with **…**. Never fabricate a metric that is not in the repo or the student's own words.
+- If the README has NO hard numbers, you must STILL ask the student once for a quantifiable outcome before finalizing the project (see the ENRICHMENT OVERRIDE in the projects instruction) — a description alone is not a finished project bullet.
+
+BOILERPLATE / TEMPLATE GUARD (critical — read before writing any bullet):
+First judge whether the README is the student's OWN description of what they built, or just an UNMODIFIED scaffolding/framework template. Tell-tale signs of boilerplate: "This template provides a minimal setup", "Getting Started with Create React App", "npm run dev / build / preview" as the only content, default Vite / CRA / Next.js / Expo starter text, a list of framework plugins, a near-empty or license-only README, or text that describes the TOOL/FRAMEWORK rather than a specific application.
+If the README is boilerplate/template text:
+- Do NOT author bullets from it — those would describe the scaffolding, not the student's work, and a recruiter will spot it instantly. This is WORSE than no bullets.
+- Keep tech_stack from languages (that part is real), but leave bullets to ONLY what the student themselves stated in their messages.
+- Set clarification_needed asking what the project actually DOES and one concrete feature or outcome they built (e.g. "Repo se sirf template dikh raha hai — aapne is project mein khud kya banaya? 1-2 features ya kaam batao."). Do NOT mark the project sufficient on boilerplate alone.
 Repo data:
 ${JSON.stringify({
         name: repoEnrichment.name,
@@ -492,9 +511,12 @@ ${JSON.stringify({
   // "Razorpay" carries no clue which field it answers, so the LLM drops it and
   // the router re-asks. This line gives the LLM the same context a human chat
   // would have: "you just asked X, so this reply IS X."
-  const focusBlock = focus
-    ? `\n\nCONVERSATION CONTEXT: The student was JUST asked specifically for the "${focus}" of their experience. Their message below is almost certainly the answer to THAT — map it to "${focus}" even if stated tersely or as a bare fragment (a bare date range → dates; a bare company name → company; a bare job title → role). Fill that field; do not discard a short reply just because it isn't a full sentence.`
-    : '';
+  let focusBlock = '';
+  if (focus && state === 'AWAITING_PROJECTS') {
+    focusBlock = `\n\nCONVERSATION CONTEXT: You JUST asked the student a follow-up about their CURRENT project — it is already in resume_json.pending_project. Their message below is the ANSWER to that follow-up (a metric, a link, a date, or a detail) for THAT SAME project, even if it doesn't repeat the project name. MERGE it into the existing pending_project: a number/outcome → add it as a NEW bullet; a repo/live URL → set github_url/demo_url. Do NOT treat this as a new project and do NOT fall back to asking "what did you build" (CASE A) — the project already exists. If the student signals they have no such number ("pata nahi", "no numbers", "kuch nahi", "skip", "none", "abhi nahi"), accept the existing bullets and set clarification_needed = null.`;
+  } else if (focus) {
+    focusBlock = `\n\nCONVERSATION CONTEXT: The student was JUST asked specifically for the "${focus}" of their experience. Their message below is almost certainly the answer to THAT — map it to "${focus}" even if stated tersely or as a bare fragment (a bare date range → dates; a bare company name → company; a bare job title → role). Fill that field; do not discard a short reply just because it isn't a full sentence.`;
+  }
 
   const system = `You are extracting structured resume data from a student's WhatsApp message. The student types in English, Hinglish (Roman-script Hindi), or sometimes pure Hindi. Extract ONLY what they explicitly stated or what's verifiable from GitHub repo data when provided. Do not invent metrics, claims, or skills.
 
@@ -518,6 +540,25 @@ If the message is unclear or insufficient, set the relevant data field to null a
 Respond with JSON only, no surrounding prose, no markdown fences.`;
 
   const result = await complete({ system, user: body });
+
+  // Seed pending_project.name from the repo when enrichment fired but the LLM
+  // declined to author one (e.g. boilerplate README guard). Without a name the
+  // follow-up reply has nothing to attach to via session.proj_focus, and the
+  // next turn would restart as a brand-new project.
+  if (
+    repoEnrichment &&
+    state === 'AWAITING_PROJECTS' &&
+    result.data &&
+    result.data.project &&
+    !result.data.project.name &&
+    repoEnrichment.name
+  ) {
+    result.data.project.name = repoEnrichment.name;
+    if (!result.data.project.github_url && repoEnrichment.html_url) {
+      result.data.project.github_url = repoEnrichment.html_url;
+    }
+  }
+
   return { ...result, repoEnrichment };
 }
 

@@ -432,15 +432,22 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
         session.resume_json.projects = [];
       }
       session.resume_json.pending_project = null;
+      session.proj_focus = null;
       session.state = NEXT_STATE[current];
       await setSession(phoneHash, session);
       return pickPrompt(session.state, session);
     }
     try {
-      const { data, usage, repoEnrichment } = await extractSection({ state: current, body: trimmed, resumeJson: session.resume_json, session });
+      // Pass a follow-up hint when we're mid-project (pending_project exists). The
+      // projects extractor is otherwise stateless, so a terse metric/link reply
+      // ("around 300 signups") would get dropped and re-asked as a new project.
+      const { data, usage, repoEnrichment } = await extractSection({ state: current, body: trimmed, resumeJson: session.resume_json, session, focus: session.proj_focus || null });
       logger.info({ phoneHash: phoneShort, state: current, usage, enriched: !!repoEnrichment }, 'extracted');
       SECTION_CONFIG[current].merge(session.resume_json, data);
       if (data.clarification_needed) {
+        // We asked a follow-up about the current project — remember it so the next
+        // (terse) reply is mapped onto pending_project instead of restarting.
+        session.proj_focus = session.resume_json.pending_project && session.resume_json.pending_project.name ? 'followup' : null;
         await setSession(phoneHash, session);
         return data.clarification_needed;
       }
@@ -449,6 +456,7 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
         session.resume_json.projects.push(session.resume_json.pending_project);
       }
       session.resume_json.pending_project = null;
+      session.proj_focus = null;
       await setSession(phoneHash, session);
       return pickMessage('projectSaved', { n: session.resume_json.projects.length });
     } catch (e) {

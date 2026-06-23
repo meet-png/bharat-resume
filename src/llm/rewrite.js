@@ -40,11 +40,11 @@ VOICE — modeled on a high-bar reference resume (see docs/template-reference.md
 1. SUMMARY (2-4 lines):
    Structure: claim → mechanism → result, in three parts. Optionally close with a thesis sentence that frames the body as evidence.
 
-   Example shape (do NOT copy text — copy SHAPE):
-   "I build data and AI systems end-to-end — instrumented ETL pipelines, schema-driven LLM contracts, and dashboards that defend a falsifiable claim. In 2026 I shipped three: a trade-data warehouse (12,828 rows, 20/20 validation) that overturned the industry's 'September peak' assumption; an autonomous sales agent at ~\$0.04/conversation, 15%+ booking rate; and an ICP-grounded content pipeline cutting copywriting cost ~99%. I learn by shipping — every system above has real numbers, not adjectives, behind it."
+   Example shape (do NOT copy text — copy SHAPE and VOICE):
+   "Data and AI engineer who builds systems end-to-end — instrumented ETL pipelines, schema-driven LLM contracts, and dashboards that defend a falsifiable claim. Shipped a trade-data warehouse (12,828 rows, 20/20 validation) that overturned the 'September peak' assumption, an autonomous sales agent at ~\$0.04/conversation with a 15%+ booking rate, and an ICP-grounded content pipeline cutting copywriting cost ~99%. Every system has real numbers, not adjectives, behind it."
 
    Rules:
-   - Third-person factual by default; if the student's input is clearly first-person, you may stay first-person.
+   - VOICE: standard resume summary voice — IMPERSONAL / implied-first-person. NEVER write the student's name. NEVER use third-person pronouns (he/she/they/"his/her") and NEVER narrate them by name ("Priya is a…", "Rohan developed…"). Also avoid explicit "I/my". Lead with a role noun or skill phrase: "Data analyst skilled in Looker and BigQuery who reduced query runtime from 40s to 6s…" — exactly how the reference resume templates read.
    - Dense with metrics: every claim has a number behind it WHERE THE STUDENT PROVIDED ONE. Don't invent numbers. Skip the number if the student didn't give one.
    - Mentions degree + year + 1-2 strongest concrete projects/outcomes/skills.
 
@@ -67,6 +67,19 @@ VOICE — modeled on a high-bar reference resume (see docs/template-reference.md
      • Bullet 2: QUALITY         (accuracy / effectiveness / named flagship from input)
      • Bullet 3: IMPACT          (time/cost saved / business outcome / shipped — from input)
    Two strong, fact-grounded bullets > three with one invented.
+
+   PROJECT bullets — ANCHOR IDENTITY (do not drop the description for bare numbers):
+   The FIRST bullet of a PROJECT must establish WHAT the project IS (the one-line
+   description / core feature from the input or README) AND fold a metric/outcome
+   into that SAME bullet when one exists. Never reduce a project to naked numbers
+   with no statement of what it is — that reads as incomplete.
+     Input: description "gamified developer habit-tracker with streaks & leaderboard"
+            + metrics "300 signups", "1200+ habits tracked"
+     WRONG: • About 300 developers signed up.   • 1200+ habits tracked.
+     RIGHT: • Built DevHab, a gamified developer habit-tracker with streaks and a
+              leaderboard — **300+ signups**, **1200+ habits tracked**.
+   Combine the descriptive fact with the metric facts rather than treating the
+   description as a droppable separate bullet.
 
    Use markdown \`**bold**\` markers around the metric phrase. NEVER bold the action verb.
 
