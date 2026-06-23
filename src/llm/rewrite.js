@@ -116,18 +116,22 @@ OUTPUT SCHEMA (return JSON only, this exact shape):
   "linkedin": string | null,
   "github": string | null,
   "leetcode": string | null,
-  "coding_profiles": [{ "platform": string, "url": string }],
+  "coding_profiles": [{ "platform": string, "url": string | null, "stat": string | null }],
   "summary": string,
   "education": [{ "degree": string, "college": string, "branch": string | null, "location": string | null, "dates": string | null, "cgpa": string | null, "coursework": string | null }],
-  "skills": { "languages": [string], "frameworks": [string], "tools": [string], "databases": [string], "other": [string] },
+  "skills": [{ "category": string, "items": [string] }],
   "experience": [{ "role": string, "company": string, "location": string | null, "dates": string | null, "tech_stack": [string], "bullets": [string] }],
-  "projects": [{ "name": string, "tech_stack": [string], "dates": string | null, "github_url": string | null, "bullets": [string] }],
+  "projects": [{ "name": string, "tech_stack": [string], "dates": string | null, "github_url": string | null, "demo_url": string | null, "bullets": [string] }],
   "por": [{ "role": string, "organization": string, "dates": string | null, "bullets": [string] }],
   "certifications": [{ "name": string, "url": string | null }],
   "achievements": [string]
 }
 
 Bullets are PLAIN STRINGS — include the \`**...**\` markdown markers around the metric inside the string. Example: "Architected an ETL pipeline ingesting 5 sources — **12,828 rows, 20/20 validation**."
+
+SKILLS: keep every item the student listed — NEVER add a skill they didn't provide. You MAY rename or merge the category labels to read sharply for the target role (e.g. "Other" → "ML / AI" or "Tools / DevOps"), and order categories strongest-first. Never emit a category labelled "Other"/"Misc".
+
+CONTACT FIELDS (name, email, linkedin, github, leetcode, coding_profiles, phone): echo them unchanged — they are re-attached verbatim downstream regardless, so do not alter URLs or counts.
 
 Sections the student left empty: keep as empty array (not null, not omitted).`;
 
@@ -147,6 +151,19 @@ Sections the student left empty: keep as empty array (not null, not omitted).`;
     result.data.coding_profiles = Array.isArray(resumeJson.coding_profiles) ? resumeJson.coding_profiles : [];
     if (phoneFrom) {
       result.data.phone = String(phoneFrom).replace(/^whatsapp:/i, '').replace(/[^\d+]/g, '');
+    }
+
+    // Competitive-programming is highest-signal as an achievement WITH counts,
+    // not just a contact link (see top tech resumes). If the student gave any
+    // stat (problem count / rating), synthesize one factual achievement bullet
+    // deterministically — never via the LLM, so the numbers can't be inflated.
+    const withStats = result.data.coding_profiles.filter((c) => c && c.platform && c.stat);
+    if (withStats.length > 0) {
+      const parts = withStats.map((c) => `${c.platform}: **${c.stat}**`);
+      const bullet = `Competitive programming — ${parts.join('; ')}.`;
+      if (!Array.isArray(result.data.achievements)) result.data.achievements = [];
+      const already = result.data.achievements.some((a) => /competitive programming/i.test(String(a)));
+      if (!already) result.data.achievements.unshift(bullet);
     }
   }
 

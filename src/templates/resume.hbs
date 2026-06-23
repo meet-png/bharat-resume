@@ -192,7 +192,7 @@
     <div class="entry">
       <div class="row">
         <span>
-          {{#if github_url}}<a href="{{github_url}}" style="color: var(--c-link); text-decoration: underline; font-size: var(--sz-meta);">[GitHub]</a>  {{/if}}<span class="role">{{name}}</span>
+          {{#if github_url}}<a href="{{github_url}}" style="color: var(--c-link); text-decoration: underline; font-size: var(--sz-meta);">[GitHub]</a>  {{/if}}<span class="role">{{name}}</span>{{#if demo_url}}  <a href="{{demo_url}}" style="color: var(--c-link); text-decoration: underline; font-size: var(--sz-meta);">[Live]</a>{{/if}}
         </span>
         <span class="right">{{dates}}</span>
       </div>

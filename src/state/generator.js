@@ -106,9 +106,8 @@ function whatsappBold(s) {
 function collectActualSkills(resume) {
   const set = new Set();
   const add = (s) => { if (s && typeof s === 'string') set.add(s.toLowerCase().trim()); };
-  const sk = resume?.skills || {};
-  for (const k of ['languages', 'frameworks', 'tools', 'databases', 'other']) {
-    for (const item of (sk[k] || [])) add(item);
+  for (const cat of (Array.isArray(resume?.skills) ? resume.skills : [])) {
+    for (const item of (cat?.items || [])) add(item);
   }
   for (const p of (resume?.projects || [])) {
     for (const t of (p.tech_stack || [])) add(t);
@@ -139,19 +138,6 @@ function keywordsMatched(resume, jdKeywords) {
     }
   }
   return matched;
-}
-
-function summarizeSkills(skills) {
-  if (!skills) return [];
-  const out = [];
-  const labels = { languages: 'Languages', frameworks: 'Frameworks', tools: 'Tools', databases: 'Databases', other: 'Other' };
-  for (const k of ['languages', 'frameworks', 'tools', 'databases', 'other']) {
-    const items = skills[k] || [];
-    if (items.length === 0) continue;
-    const shown = items.slice(0, 5).join(', ') + (items.length > 5 ? `, +${items.length - 5}` : '');
-    out.push(`${labels[k]}: ${shown}`);
-  }
-  return out;
 }
 
 // Lean preview for WhatsApp — deliberately omits all copyable content

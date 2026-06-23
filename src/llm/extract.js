@@ -46,13 +46,14 @@ ONLY set name=null and ask a clarification if the input is clearly NOT a name: a
   AWAITING_CODING_PROFILES: {
     instruction: `Extract competitive-programming / coding-practice profile links the student lists. Common platforms: LeetCode, Codeforces, CodeChef, HackerRank, HackerEarth, GeeksforGeeks (GFG), AtCoder, TopCoder, Kaggle, Codewars.
 
-For each link the student gives, output { "platform": <clean platform name>, "url": <full https URL> }:
+For each link the student gives, output { "platform": <clean platform name>, "url": <full https URL>, "stat": <count/rating string or null> }:
 - Normalize bare domains/usernames to a full https URL (e.g. "leetcode.com/u/aditya" → "https://leetcode.com/u/aditya").
 - Derive "platform" from the domain ("leetcode.com" → "LeetCode", "codeforces.com" → "Codeforces", "geeksforgeeks.org" → "GeeksforGeeks"). If a student names a platform but the URL is ambiguous, use the named platform.
-- A student may give several — return all of them.
-- If the message is "skip", empty, or contains no recognizable coding-profile link, return an empty array. Do NOT invent or guess a profile URL, and do NOT ask follow-up questions here — this step is optional.`,
-    shape: '{ "coding_profiles": [{ "platform": string, "url": string }], "clarification_needed": string | null }',
-    merge: (rj, x) => { rj.coding_profiles = Array.isArray(x.coding_profiles) ? x.coding_profiles : []; },
+- "stat" = any problem count, rating, rank, or badge the student MENTIONS for that platform — e.g. "470+ solved", "rating 1843", "Knight badge", "Guardian". Copy it verbatim into stat. If they give no number/rating for a platform, set stat to null. NEVER invent a count or rating.
+- A student may give several — return all of them. A student may also give only a count without a link (e.g. "solved 500 on leetcode") — still capture it with url null and stat set.
+- If the message is "skip", empty, or contains no recognizable coding-profile, return an empty array. Do NOT invent or guess a profile URL, and do NOT ask follow-up questions here — this step is optional.`,
+    shape: '{ "coding_profiles": [{ "platform": string, "url": string | null, "stat": string | null }], "clarification_needed": string | null }',
+    merge: (rj, x) => { rj.coding_profiles = Array.isArray(x.coding_profiles) ? x.coding_profiles.filter((c) => c && c.platform && (c.url || c.stat)) : []; },
   },
 
   AWAITING_EDUCATION: {
@@ -88,20 +89,24 @@ For each link the student gives, output { "platform": <clean platform name>, "ur
   },
 
   AWAITING_SKILLS: {
-    instruction: `Categorize the listed skills into 5 buckets. The buckets are guidelines — adapt their meaning to the TARGET ROLE in the JD context above:
+    instruction: `Group the listed skills into 3-6 NAMED categories, ordered strongest/most-relevant first. Choose category labels that fit the TARGET ROLE in the JD context above — do NOT use a fixed generic set. This is how strong real resumes do it.
 
-- languages: programming languages for tech roles (Python, Java, JS) OR human languages if role-relevant (translation, customer-facing)
-- frameworks: software frameworks (React, Django, Node) for tech roles OR domain methodologies for non-tech (Agile, Six Sigma, Design Thinking, GTM frameworks)
-- tools: any tool/software they use, calibrated to the role — Git/Docker for engineers; Figma/Sketch for designers; HubSpot/Mailchimp/Salesforce for marketers/sales; Excel/SAP/Tableau for finance/analysts; AutoCAD/SolidWorks for civil/mech engineers
-- databases: data stores (mostly relevant for tech/data roles; empty otherwise)
-- other: anything else relevant — domain expertise, certifications mentioned, soft skills, regulatory knowledge, methodologies
+GUIDANCE ON LABELS (pick what fits; invent role-appropriate ones):
+- Software/Backend: "Languages", "Frameworks", "Databases", "Tools / DevOps", "Cloud", "Security & Architecture"
+- Data/AI/ML: "Languages", "ML / AI", "Data & BI", "Databases", "MLOps / Tools"
+- Frontend/Mobile: "Languages", "Frameworks", "Styling / UI", "Tooling", "Testing"
+- Non-tech (if ever): pick domain-native labels (e.g. Marketing → "Channels", "Analytics", "Martech Tools").
 
-Include EVERY skill the student mentioned. When ambiguous about which bucket, prefer "tools" or "other" — never drop a skill, and never force a non-tech skill into a tech bucket. Preserve student's capitalization where reasonable. Empty array if a category genuinely has nothing.
+HARD RULES ON LABELS:
+- NEVER use the label "Other", "Misc", or "Miscellaneous" — always pick a meaningful, specific category name. If something doesn't fit, name the category for what it IS (e.g. "Concepts", "Methodologies", "Coursework").
+- A label may combine two related areas with "&" or "/" (e.g. "Databases & Streaming", "Tools / DevOps") — this is encouraged when it reads cleanly.
+- Include EVERY skill the student mentioned; never drop one. Preserve the student's capitalization where reasonable.
+- A category with no items should simply be omitted from the array (don't emit empty categories).
 
 THIS IS A SIMPLE LIST STEP — DO NOT INTERROGATE.
 Set clarification_needed to null whenever the message contains AT LEAST ONE skill (it almost always does). A short list IS complete and sufficient. NEVER ask for metrics, impact, proficiency levels, years of experience, examples, or "more" skills — that judgement happens later in the experience/projects steps, never here. Only set clarification_needed (a brief, friendly ask for their skills) if the message contains NO skills at all — e.g. it is empty, "skip", a question, or gibberish.`,
-    shape: '{ "skills": { "languages": [string], "frameworks": [string], "tools": [string], "databases": [string], "other": [string] }, "clarification_needed": string | null }',
-    merge: (rj, x) => { rj.skills = x.skills || { languages: [], frameworks: [], tools: [], databases: [], other: [] }; },
+    shape: '{ "skills": [{ "category": string, "items": [string] }], "clarification_needed": string | null }',
+    merge: (rj, x) => { rj.skills = Array.isArray(x.skills) ? x.skills.filter((c) => c && c.category && Array.isArray(c.items) && c.items.length) : []; },
   },
 
   // EXPERIENCE — multi-bullet, multi-angle sufficiency. Drives bullet density.
@@ -191,7 +196,10 @@ A project is SUFFICIENT only when all four are true:
         SCALE / VOLUME — data points, users, records, requests, dataset size, transactions
         QUALITY        — accuracy %, F1, precision, error rate, NPS, % improvement
         IMPACT         — time saved, cost saved, business outcome, latency, throughput, deployed/shipped
-  (d) github_url is a real URL, OR pending_project._link_declined === true
+  (d) github_url OR demo_url is a real URL, OR pending_project._link_declined === true
+
+GITHUB vs LIVE LINK:
+A github.com repo URL goes in github_url. A DEPLOYED / LIVE / hosted URL (vercel.app, netlify.app, a custom domain, "live link", "deployed at") goes in demo_url. A project may have BOTH — capture each in its own field. For the CASE C link ask below, either a repo link or a live link satisfies requirement (d).
 
 LINK-DECLINE DETECTION:
 If the current message contains any of: "no link", "skip link", "private", "private repo", "no repo", "not public", "github nahi", "nahi link", "link nahi", "no github" — set link_declined = true in your output. Router persists this to pending_project._link_declined.
@@ -270,7 +278,7 @@ ROLE-NATIVE METRICS for CASE D — adapt to TARGET ROLE in JD context:
 - Civil/Mech: budget, sq ft, timeline saved, safety/quality outcome.
 - Medical/Teaching: people served, outcome improved, program scaled.
 - Other domains: pick a metric native to that field. Never default to software metrics.`,
-    shape: '{ "project": { "name": string | null, "tech_stack": [string], "dates": string | null, "github_url": string | null, "bullets": [string] } | null, "link_declined": boolean, "clarification_needed": string | null }',
+    shape: '{ "project": { "name": string | null, "tech_stack": [string], "dates": string | null, "github_url": string | null, "demo_url": string | null, "bullets": [string] } | null, "link_declined": boolean, "clarification_needed": string | null }',
     // Merge into pending_project (not projects[]). Router decides when to commit.
     merge: (rj, x) => {
       if (!rj.pending_project) rj.pending_project = {};
@@ -278,7 +286,7 @@ ROLE-NATIVE METRICS for CASE D — adapt to TARGET ROLE in JD context:
       // Persist link-decline flag across turns.
       if (x.link_declined === true) p._link_declined = true;
       if (!x.project) return;
-      for (const k of ['name', 'dates', 'github_url']) {
+      for (const k of ['name', 'dates', 'github_url', 'demo_url']) {
         if (x.project[k]) p[k] = x.project[k];
       }
       if (Array.isArray(x.project.tech_stack) && x.project.tech_stack.length > 0) {

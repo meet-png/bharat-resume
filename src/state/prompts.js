@@ -50,10 +50,10 @@ const PROMPTS = {
   ],
 
   [STATES.AWAITING_CODING_PROFILES]: [
-    "Coding profile? LeetCode / Codeforces / CodeChef / HackerRank ka link bhejiye (ek ya zyada) — ya 'skip'.",
-    "Competitive coding profiles? Share your LeetCode / Codeforces / CodeChef / HackerRank link(s), or 'skip'.",
-    "LeetCode / Codeforces / GFG / HackerRank — koi coding profile link ho toh bhej dijiye, warna 'skip'.",
-    "Any coding profiles (LeetCode, Codeforces, CodeChef, HackerRank…)? Drop the link(s) or type 'skip'.",
+    "Coding profile? LeetCode / Codeforces / CodeChef ka link bhejiye — saath mein problems solved ya rating ho toh likh dijiye (e.g. 'leetcode.com/u/me, 450+ solved'). Ya 'skip'.",
+    "Competitive coding profiles? Share your LeetCode / Codeforces / CodeChef link(s) + problems solved or rating if you have it. Or 'skip'.",
+    "LeetCode / Codeforces / GFG link + kitne problems solve kiye ya rating — bhej dijiye, warna 'skip'.",
+    "Any coding profiles (LeetCode, Codeforces, CodeChef…)? Drop the link(s) and your solved-count/rating, or type 'skip'.",
   ],
 
   [STATES.AWAITING_EDUCATION]: [

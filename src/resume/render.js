@@ -41,17 +41,6 @@ function safeUrl(raw) {
   return '';
 }
 
-// Bucket labels — adapt to what the role context shaped. For the v1 prototype
-// we keep the 5 generic labels but use clean title-case names that read well
-// in the template-reference.md style.
-const BUCKET_LABELS = {
-  languages:  'Languages',
-  frameworks: 'Frameworks',
-  tools:      'Tools',
-  databases:  'Databases',
-  other:      'Other',
-};
-
 // Builds the contact row HTML: email | phone | LinkedIn | GitHub | LeetCode.
 // Underlined links use the template's `.contact a` styling.
 function buildContactHtml(r) {
@@ -70,13 +59,17 @@ function buildContactHtml(r) {
   return parts.join('<span class="sep">|</span>');
 }
 
+// skills is an ordered array of role-tailored categories: [{ category, items }].
+// Labels are passed raw (Handlebars HTML-escapes them, so "Data & BI" renders
+// correctly); items are pre-escaped here and rendered via the same template slot.
 function buildSkillCategories(skills) {
-  if (!skills || typeof skills !== 'object') return [];
+  if (!Array.isArray(skills)) return [];
   const out = [];
-  for (const key of ['languages', 'frameworks', 'tools', 'databases', 'other']) {
-    const items = safeArray(skills[key]);
-    if (items.length === 0) continue;
-    out.push({ label: BUCKET_LABELS[key], items: ' ' + items.map(escapeHtml).join(', ') });
+  for (const cat of skills) {
+    const items = safeArray(cat && cat.items);
+    const label = String((cat && cat.category) || '').trim();
+    if (items.length === 0 || !label) continue;
+    out.push({ label, items: ' ' + items.map(escapeHtml).join(', ') });
   }
   return out;
 }
@@ -113,6 +106,7 @@ function prepResume(r0) {
     name:           escapeHtml(p.name || ''),
     dates:          escapeHtml(p.dates || ''),
     github_url:     safeUrl(p.github_url),
+    demo_url:       safeUrl(p.demo_url),
     tech_stack_str: safeArray(p.tech_stack).map(escapeHtml).join(' · '),
     bullets:        safeArray(p.bullets).map(mdBold),
   }));

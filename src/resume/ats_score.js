@@ -88,9 +88,8 @@ function lev(a, b) {
 function collectActualSkills(resume) {
   const set = new Set();
   const add = (s) => { if (s && typeof s === 'string') set.add(s.toLowerCase().trim()); };
-  const sk = resume?.skills || {};
-  for (const k of ['languages', 'frameworks', 'tools', 'databases', 'other']) {
-    for (const item of (sk[k] || [])) add(item);
+  for (const cat of (Array.isArray(resume?.skills) ? resume.skills : [])) {
+    for (const item of (cat?.items || [])) add(item);
   }
   for (const p of (resume?.projects || [])) for (const t of (p.tech_stack || [])) add(t);
   for (const e of (resume?.experience || [])) for (const t of (e.tech_stack || [])) add(t);
