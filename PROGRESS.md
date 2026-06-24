@@ -303,6 +303,33 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 
 **What's actually left before launch:** real end-to-end dry run on Railway (Meta → Railway → bot → PDF) with at least one real WhatsApp conversation — the fixes pushed today need a live confirmation that PDF generation now succeeds on a fresh persona. Then 2-3 friendly JECRC students before broadcasting to 100.
 
+### Session — 2026-06-24 (Meta publish discovery — launch date must slip, Claude Opus 4.7)
+
+While planning friend-testing for tomorrow's 25 Jun launch, surfaced a hard gate I hadn't fully scoped: **Meta App Mode**.
+
+**Findings from the live Meta dashboard:**
+- App name: `Bharat Resume bot` · App ID `4061685003963331` · Contact email `help.bharatresume@gmail.com`.
+- Status: **Unpublished** (sidebar shows "Publish — Unpublished" badge — that's Meta's current name for what used to be "Development mode"; there is no separate toggle).
+- **Test recipient cap while unpublished: 5 phone numbers.** Inbound from anyone hits webhook; outbound only delivers to verified test recipients. Without verification on the recipient side (Meta sends a WhatsApp OTP, they tap to accept), the friend sees silence.
+- To send messages to arbitrary numbers (the 100-student broadcast), the app MUST be Published. Publishing requires:
+  - Six Basic-settings fields populated: app icon (1024×1024), category, privacy policy URL, terms of service URL, app domains, plus the DPO contact (optional unless EU users).
+  - **Business Verification** in Meta Business Suite — separate process, requires PAN / GSTIN / address proof / business identity documents. **Human review by Meta, typically 2-5 business days for India.**
+
+**Implication for the 25 Jun launch date:**
+- PRD §18's "Day 7 (Wed 25 Jun) — Launch to 100" assumed publishing was instant. It is not.
+- **Realistic broadcast launch is 3-5 days after Business Verification submission.** Submitting today doesn't help tomorrow.
+- **Tomorrow's testing plan is capped at 5 friends** via the test-recipient path (add their numbers in WhatsApp → API Setup → To). The 100-student broadcast slips to ~Sat/Sun (28-29 Jun) once Business Verification clears.
+
+**Next concrete actions (Meet-gated decisions):**
+1. Decide whether to start the publish flow now (recommended). If yes:
+   - I add `GET /privacy` and `GET /terms` endpoints on the Express server (~20 min) so those two URL fields can point at `bharat-resume-production.up.railway.app/privacy` and `/terms`.
+   - Meet: create a 1024×1024 app icon (10 min in Canva), pick Category ("Productivity"), paste the URLs, hit Save.
+   - Meet: submit Business Verification in Meta Business Suite with PAN / GSTIN / address proof.
+2. While the verification queue runs, do the 5-friend test pilot tomorrow as planned. Capture bugs.
+3. When verified, click Publish → broadcast to 100.
+
+**What was saved this turn (not pushed yet):** memory `bharat-resume-project.md` updated with full Meta app state + the publish-blocker reality. PROGRESS continuation entry above. No code changes.
+
 ### Session — 2026-06-24 (ATS-checklist hardening — fonts, entity decode, phone, tech cap, sanity, Claude Opus 4.7)
 
 Meet handed me an exhaustive ATS / visual / encoding checklist (entities, single-column, fonts ≥10/12pt, name pure black, phone formatted, tech-stack cap, pre-delivery self-check, etc.) — "make a checklist and perform these." Audited template + render.js against every rule, found seven concrete gaps, fixed all of them in **commit `f530901`**.
