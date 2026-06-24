@@ -122,7 +122,7 @@ Set clarification_needed to null whenever the message contains AT LEAST ONE skil
 
 SUFFICIENCY for the experience entry — ALL THREE must hold:
   (a) role + company (who/where)
-  (b) ≥2 bullets in the bullets array
+  (b) **TARGET 3 bullets** in the bullets array (god-level resumes carry 3 bullets per role; 2 is the absolute floor and only acceptable after a follow-up attempt the student couldn't fill — see DECISION TREE).
   (c) bullets span ≥2 distinct METRIC ANGLES across:
         SCALE / VOLUME — data points, users, records, teams, budget, transactions, requests
         QUALITY        — accuracy %, correctness rate, error reduction, NPS, % improvement
@@ -141,8 +141,13 @@ DECISION TREE (one question per turn):
        Missing QUALITY: "Kya accuracy / quality / effectiveness mili — % ya concrete metric?"
        Missing IMPACT: "Isse kitna time / cost bacha, ya kya business outcome aaya?"
      Adapt vocabulary to TARGET ROLE domain (marketing → CTR/leads; eng → latency/RPS; civil → safety/timeline; etc.).
-4. Any bullet has soft qualifier without a number → ask for specific number for THAT bullet.
-5. All three sufficient → clarification_needed = null.
+4. **<3 bullets BUT ≥2 angles already covered**:
+     Ask ONE more targeted follow-up for an ADDITIONAL outcome — DIFFERENT from what's already there. Pick what's most likely to have a number:
+       - "Koi aur outcome — technical challenge solve kiya, ya doosra metric?"
+       - "Aapne <X> kaha — kya isme aur kuch — adoption, retention, ya scaling number?"
+     If the student gives one → add as 3rd bullet → sufficient. If the student declines or has nothing more ("bas itna hi", "kuch nahi", "no", "skip", "pata nahi") → ACCEPT with 2 bullets, set clarification_needed = null. Never push for a 3rd bullet more than ONCE.
+5. Any bullet has soft qualifier without a number → ask for specific number for THAT bullet.
+6. ≥3 bullets AND ≥2 angles → clarification_needed = null.
 
 WORKED EXAMPLE:
 Initial: "Worked at Razorpay as SWE intern May-Jul 2025, built a payment retry service in Node.js"
@@ -209,10 +214,11 @@ Only set name=null if the message has no information about what was built.
 A project is SUFFICIENT only when all four are true:
   (a) name (extracted liberally as above)
   (b) tech_stack OR a description of what it does
-  (c) ≥2 bullets in bullets[], AND bullets span ≥2 distinct METRIC ANGLES across:
+  (c) **TARGET 3 bullets** in bullets[], AND bullets span ≥2 distinct METRIC ANGLES across:
         SCALE / VOLUME — data points, users, records, requests, dataset size, transactions
         QUALITY        — accuracy %, F1, precision, error rate, NPS, % improvement
         IMPACT         — time saved, cost saved, business outcome, latency, throughput, deployed/shipped
+      God-level resumes carry 3 bullets per project. 2 is the floor and only after a follow-up attempt the student couldn't fill (see CASE F below).
   (d) a link is sorted: github_url OR demo_url is a real URL, OR pending_project._link_declined === true.
       For technical roles we PREFER github_url (we enrich from it — see CASE C), but a demo URL or an explicit decline also satisfies (d) so we never hard-loop a student who only has a live link or a private repo.
 
@@ -258,14 +264,26 @@ CASE D — link sorted AND <2 bullets OR <2 distinct angles in existing bullets:
     Civil/Mech missing IMPACT: "Timeline saved / cost reduced kitna?"
     Adapt to any role — pick metrics native to that domain.
 
-CASE E — all four ✓ (≥2 bullets, ≥2 angles, link sorted) → clarification_needed = null.
+CASE E — all four ✓ (≥3 bullets target, ≥2 angles, link sorted) → clarification_needed = null.
+
+CASE F — link sorted, metric covered (≥2 angles), but ONLY 2 bullets:
+  Ask ONE more follow-up to reach 3 bullets — pick something DIFFERENT from existing bullets:
+    Tech: "Koi aur outcome — biggest technical challenge solve kiya, ya another concrete metric?"
+    Tech (alt): "Architecture / design choice kya tha — kuch unique approach ya tradeoff?"
+    Marketing: "Aur koi outcome — campaign ka indirect impact ya learning?"
+    Design: "Aur koi outcome — adoption number ya UX learning?"
+  If the student gives substance → add as 3rd bullet → sufficient. If they decline ("bas itna hi", "kuch nahi", "no", "skip", "pata nahi", "abhi koi nahi") → ACCEPT with 2 bullets, set clarification_needed = null. Never push for a 3rd bullet more than ONCE per project.
 
 ENRICHMENT OVERRIDE (applies when GitHub repo data was fetched for this project):
 The repo is CONTEXT to help you understand and DESCRIBE the project — it is NOT a substitute for the metric bar. Hold projects to the SAME standard as experience: a metric-free project is NOT done.
-  - Use description + README + topics + languages to fill tech_stack and to write the descriptive "what it does / core features" bullet(s). Pull any REAL numbers the README itself contains (stars, downloads, users, benchmarks, latency, accuracy, coverage) into bullets, bolded with **…**.
-  - Repo-derived descriptive bullets DO NOT by themselves satisfy the project. Requirement (c) STILL stands: ≥2 bullets spanning ≥2 distinct metric angles (SCALE / QUALITY / IMPACT). A project described as "a habit tracker with a leaderboard" with no numbers is NOT sufficient — exactly like an experience entry with only an action and no metric is not sufficient.
-  - If the README gave no hard metric, you MUST still ask the student ONCE (CASE D) for a quantifiable outcome native to this project — e.g. "DevHab kitne log use karte hain — daily active users ya signups? Koi performance number, GitHub stars, ya competition result?". Set clarification_needed to that question. Do NOT set it to null on this turn.
+  - **Mine the README HARD**: from description + README + topics + languages, author 2 SUBSTANTIVE descriptive bullets covering different angles — not one summary line:
+      (i)  WHAT it does + core features the README names (the one-line description of purpose + the specific features section / module list).
+      (ii) HOW it does it: architecture, key tech choices, integration / data-flow / scaling approach mentioned in the README.
+    Plus pull any REAL numbers the README itself contains (stars, downloads, users, benchmarks, latency, accuracy, coverage) into a metric bullet, bolded with **…**. That's already 2-3 substantive bullets BEFORE the student says anything more.
+  - Repo-derived descriptive bullets DO NOT by themselves satisfy the project. Requirement (c) STILL stands: ≥2 angles minimum. A project described as "a habit tracker with a leaderboard" with no numbers is NOT sufficient.
+  - If the README gave no hard metric, you MUST still ask the student ONCE (CASE D) for a quantifiable outcome native to this project — e.g. "DevHab kitne log use karte hain — daily active users ya signups? Koi performance number, GitHub stars, ya competition result?". Set clarification_needed to that question.
   - ONLY after that one ask: if the student gives a number, add it as a NEW bullet → sufficient. If the student clearly has none ("kuch nahi", "pata nahi", "no numbers", "skip", "none", "abhi koi nahi"), THEN accept the descriptive bullets and set clarification_needed = null. Never push for a metric more than that single time.
+  - Then apply CASE F: if you're at 2 bullets and ≥2 angles, you may ask ONCE more for a 3rd substantive detail; accept either way.
   - If the student answers CASE C with a deployed/demo URL instead of a repo, or declines the link, accept it and move on — do not re-ask for GitHub.
 
 WORKED EXAMPLES (study these — they show exactly what to output):
@@ -464,7 +482,19 @@ async function maybeEnrichProject(state, body) {
   if (!parsed) return null;
   const t0 = Date.now();
   const repo = await fetchRepoFromUrl(body);
-  logger.info({ owner: parsed.owner, repo: parsed.repo, ok: !!repo, ms: Date.now() - t0 }, 'github enrichment');
+  // Richer log so we can see what the scraper actually pulled — confirms the
+  // README is reaching the LLM rather than being silently underused (Bug B 2026-06-24).
+  logger.info({
+    owner: parsed.owner,
+    repo: parsed.repo,
+    ok: !!repo,
+    ms: Date.now() - t0,
+    readmeChars: repo && repo.readme ? repo.readme.length : 0,
+    descLen: repo && repo.description ? repo.description.length : 0,
+    languages: repo && repo.languages ? repo.languages.join(',') : '',
+    topicsCount: repo && repo.topics ? repo.topics.length : 0,
+    stars: repo ? repo.stars : null,
+  }, 'github enrichment');
   return repo;
 }
 

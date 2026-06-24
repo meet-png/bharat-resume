@@ -48,12 +48,12 @@ VOICE — modeled on a high-bar reference resume (see docs/template-reference.md
    - Dense with metrics: every claim has a number behind it WHERE THE STUDENT PROVIDED ONE. Don't invent numbers. Skip the number if the student didn't give one.
    - Mentions degree + year + 1-2 strongest concrete projects/outcomes/skills.
 
-2. BULLETS — UP TO 2-3 per entry, selective bold on metric/outcome:
+2. BULLETS — **TARGET 3 per entry** (god-level resumes carry 3 per role / project), selective bold on metric/outcome:
 
    *** HARD RULE: NUMBER OF OUTPUT BULLETS ≤ NUMBER OF DISTINCT FACTS IN INPUT. ***
    If the input only contains 1 sentence of work, you output 1 bullet. Period.
-   If the input contains 2 distinct facts (e.g. "cleaned 50K rows AND built 3 dashboards"), output up to 2 bullets — one per fact.
-   Three bullets only if THREE distinct quantifiable facts exist in the input.
+   If the input contains 2 distinct facts, output up to 2 bullets — one per fact.
+   **If the input contains 3+ distinct facts, OUTPUT 3 bullets** — do NOT compress 5 distinct facts into 2 bullets by grouping them. One bullet per substantive fact; aim for 3 total per entry whenever the input supports it. 2 bullets is the floor for an entry, only acceptable when the input genuinely has <3 substantive facts.
 
    BANNED patterns (these are INVENTION — they violate PRD §7.2 rule 1):
      • "Achieved strong [adjective]" / "Demonstrated [soft skill]" / "Enhanced [generic]"
@@ -68,18 +68,23 @@ VOICE — modeled on a high-bar reference resume (see docs/template-reference.md
      • Bullet 3: IMPACT          (time/cost saved / business outcome / shipped — from input)
    Two strong, fact-grounded bullets > three with one invented.
 
-   PROJECT bullets — ANCHOR IDENTITY (do not drop the description for bare numbers):
+   PROJECT bullets — ANCHOR IDENTITY without compressing:
    The FIRST bullet of a PROJECT must establish WHAT the project IS (the one-line
-   description / core feature from the input or README) AND fold a metric/outcome
-   into that SAME bullet when one exists. Never reduce a project to naked numbers
-   with no statement of what it is — that reads as incomplete.
-     Input: description "gamified developer habit-tracker with streaks & leaderboard"
+   description / core feature from the input or README) AND fold ONE primary
+   metric into that SAME bullet when one exists. Never reduce a project to naked
+   numbers with no statement of what it is — that reads as incomplete.
+   **DO NOT pack every metric into bullet 1.** Additional substantive facts get
+   their own bullets (bullet 2, bullet 3) — preserve depth, don't collapse it.
+     Input: description "gamified habit-tracker with streaks & leaderboard"
             + metrics "300 signups", "1200+ habits tracked"
-     WRONG: • About 300 developers signed up.   • 1200+ habits tracked.
-     RIGHT: • Built DevHab, a gamified developer habit-tracker with streaks and a
-              leaderboard — **300+ signups**, **1200+ habits tracked**.
-   Combine the descriptive fact with the metric facts rather than treating the
-   description as a droppable separate bullet.
+     WRONG: • About 300 developers signed up.   • 1200+ habits tracked.   (drops identity)
+     ALSO WRONG: ONE bullet with all 5 facts crammed in — reads as a wall of text.
+     RIGHT (2 facts): • Built DevHab, a gamified habit-tracker with streaks and a leaderboard — **300+ signups**, **1200+ habits tracked**.
+     RIGHT (5 facts → 3 bullets):
+       • Built Jodhpur Export Intelligence, ingesting 5 trade sources into an 8-table star schema — **12,828 rows** on cold run.
+       • Authored **20/20 validation checks** catching every anomaly before downstream pipelines consumed the data.
+       • Applied a **-8.0% statistical correction** that revised the headline export figure from **₹18,310 Cr → ₹4,711 Cr**.
+   Rule of thumb: identity + 1 metric in bullet 1; one substantive fact each in bullets 2 and 3.
 
    Use markdown \`**bold**\` markers around the metric phrase. NEVER bold the action verb.
 

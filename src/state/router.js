@@ -459,8 +459,16 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
       // projects extractor is otherwise stateless, so a terse metric/link reply
       // ("around 300 signups") would get dropped and re-asked as a new project.
       const { data, usage, repoEnrichment } = await extractSection({ state: current, body: trimmed, resumeJson: session.resume_json, session, focus: session.proj_focus || null });
-      logger.info({ phoneHash: phoneShort, state: current, usage, enriched: !!repoEnrichment }, 'extracted');
+      const preMergeBullets = ((session.resume_json.pending_project || {}).bullets || []).length;
       SECTION_CONFIG[current].merge(session.resume_json, data);
+      const postMergeBullets = ((session.resume_json.pending_project || {}).bullets || []).length;
+      logger.info({
+        phoneHash: phoneShort, state: current, usage,
+        enriched: !!repoEnrichment,
+        bulletsBefore: preMergeBullets,
+        bulletsAfter: postMergeBullets,
+        bulletsFromTurn: postMergeBullets - preMergeBullets,
+      }, 'extracted');
       if (data.clarification_needed) {
         // We asked a follow-up about the current project — remember it so the next
         // (terse) reply is mapped onto pending_project instead of restarting.
