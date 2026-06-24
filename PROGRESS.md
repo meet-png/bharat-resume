@@ -303,6 +303,37 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 
 **What's actually left before launch:** real end-to-end dry run on Railway (Meta → Railway → bot → PDF) with at least one real WhatsApp conversation — the fixes pushed today need a live confirmation that PDF generation now succeeds on a fresh persona. Then 2-3 friendly JECRC students before broadcasting to 100.
 
+### Session — 2026-06-24 (Bug 1 last-mile, edit-isolation lock, Bug 0/2/3 from live test, 3-bullet target, Claude Opus 4.7)
+
+**Live cutover landed first.** Meta webhook URL switched from ngrok → Railway (`https://bharat-resume-production.up.railway.app/webhook/whatsapp`), and Meet sent his first real end-to-end message that produced a real PDF. The two layers blocking PDF delivery on Railway:
+- `38b9198` (yesterday) — Docker base Node 20 → 22 (Supabase Realtime needs native WebSocket).
+- `ed090d9` (yesterday) — `client.js` retry on transient transport errors + rewrite outer timeout 30s → 60s (OpenAI's `ERR_STREAM_PREMATURE_CLOSE` was dropping rewrite mid-stream).
+- `0e7f67e` + `9dacde5` — diagnostic logging (OpenAI key SHA-256 fingerprint in boot banner, error cause-chain in `openai request failed`) so any future LLM failure surfaces the real layer instead of just "Connection error."
+
+After that, Meet rotated the OpenAI key — and the very first live extract call **also** failed with `ERR_STREAM_PREMATURE_CLOSE`. Resolved itself shortly after (env propagation delay), and the next conversation produced a clean PDF.
+
+**Production lock (`e2e-happy-path` regression suite, `1b6687c`):** `.runtime/e2e-happy-path.js` drives the full Phase 2 state machine end-to-end with real OpenAI through every state, runs the real generation + render + watermark + Supabase upload, and asserts 15+ invariants (DELIVERED state, signed-URL media, Bug 0/2/3 locks, role-tailored array-shape skills, impersonal summary voice, ATS computed). Wired into `npm run check` as suite #10. PROGRESS §6.5a documents the contract.
+
+**Live-test bugs Meet found analyzing the generated resume:**
+- **Bug A** (trust-critical, launch-blocking): editing one section corrupts an unrelated one — adding an Experience entry made the entire PROJECTS section header disappear because `applyEdit` emitted `projects: []`. Stray empty `·` bullet artifacts also rendered. **Fixed `7e3c839`** — three parts:
+  - `render.js` introduces `nonEmptyStrings()`, used for every bullets / tech_stack / skill-items materialization (empty strings used to render as stray `·` or bare `<li>`).
+  - `edit.js` STRUCTURAL INTEGRITY GUARD: for every guarded section (summary, education, skills, experience, projects, por, certifications, achievements, coding_profiles, contact fields) — if the section was non-empty before the edit, the instruction didn't reference it, and the LLM dropped or SHRUNK it post-edit, RESTORE from the pre-edit value. Plus `dedupeByName()` over projects + experience (LLM occasionally emits a thinner duplicate).
+  - New `.runtime/test-edit-isolation.js` (gitignored, added to `check.js` as suite #10) — 4 real LLM edits × 59 assertions covering every untouched section. **Critical assertion: `projects.length > 0` after edit** — directly catches the disappearing-header bug.
+- **Bug C** (cross-session): same project saved twice ("DM-to-Deal" full vs. thin duplicate). `router.js` `commitProject()` now replaces by case-insensitive name instead of appending.
+- **Bug B** (god-level resume target): bullet counts varied (3 / 2 / 1) vs reference resumes that consistently show 3-4 per entry. **Fixed `49cce2c`** — `extract.js` `AWAITING_PROJECTS` + `AWAITING_EXPERIENCE` bumped to **TARGET 3 bullets**. New CASE F asks ONE more follow-up if at 2 bullets + ≥2 angles (technical challenge / additional outcome / architecture choice); student decline accepts 2. ENRICHMENT OVERRIDE strengthened to mine the README for 2 SUBSTANTIVE bullets (what + how / architecture), not one summary line. `rewrite.js` HARD RULE bumped: input with 3+ facts → OUTPUT 3 bullets, no grouping. Project ANCHOR IDENTITY now folds ONE primary metric into bullet 1; subsequent metrics get their own bullets. New worked example: 5-facts → 3 bullets. Verified: `e2e-happy-path` now asserts "rich project yields ≥3 bullets" and passes.
+
+**Regression contract state, end of session:** 10 / 11 suites GREEN locally. The 11th is `test-payment` — still red on the Razorpay test-mode 30-link/day quota (environmental; resets ~24h). All bug-class regressions are now guarded:
+  - Bug A by `test-edit-isolation` (59 assertions, 4 scenarios)
+  - Bug 0/2/3/B by `e2e-happy-path` (16 assertions, full conversation)
+  - Bug 1 by `test-day4` + boot-banner / cause-chain diagnostics
+  - Bug C by deterministic `commitProject` in router
+
+**Lessons reinforced (also logged to memory):**
+- The morning's regression contract violation (3 commits without `npm run check`) cost an entire afternoon of triage. Re-confirmed rule: `npm run check` before every commit, no exceptions. This session followed it; no further contract violations.
+- The diagnosis "test-ats has aspirational thresholds" was wrong — it was schema-migration drift. **Lesson: read the fixture before pattern-matching a failure mode.**
+- The earlier "ATS 85+ is mostly not realistic" was overcorrected — the scorer hits 92 on genuinely dense content. The constraint is student substance, not scorer ceiling.
+- "Restore the section if the LLM dropped it" is the right defensive shape; trusting the LLM to follow `Touch ONLY what the request asks for` is not enough at scale.
+
 ## 4. Open questions for Meet
 
 Carry these forward each session until resolved. Add new ones whenever a build decision needs Meet's input.
