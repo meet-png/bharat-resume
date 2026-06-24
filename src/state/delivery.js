@@ -6,6 +6,7 @@
 const { renderHtml } = require('../resume/render');
 const { htmlToPdf } = require('../resume/pdf');
 const { watermarkPdf } = require('../resume/watermark');
+const { checkRenderedHtml } = require('../resume/sanity');
 const { uploadAndSign } = require('../store/storage');
 const { createLimiter } = require('../util/limit');
 const { config } = require('../config');
@@ -44,6 +45,19 @@ async function deliverPdf(session, phoneHash, opts = {}) {
         logger.info({ waitedMs, ...renderLimit.stats() }, 'render slot acquired after queue wait');
       }
       const html = renderHtml(r);
+      // Pre-delivery sanity (ATS checklist §6 2026-06-24): scan the rendered
+      // HTML's text layer for raw HTML entities (&amp; / &lt; / &gt; / etc.)
+      // and check that recognisable section headings are present. NEVER
+      // ship a PDF that would render literal "&amp;" in its text — the
+      // checklist explicitly calls this out as a blocking defect.
+      const sanity = checkRenderedHtml(html);
+      if (!sanity.ok) {
+        logger.error({ phoneHash: String(phoneHash).slice(0, 12), violations: sanity.violations }, 'sanity check failed — refusing to ship PDF');
+        throw new Error('sanity check failed: ' + sanity.violations.map((v) => v.kind).join(','));
+      }
+      if (sanity.warnings && sanity.warnings.length > 0) {
+        logger.warn({ phoneHash: String(phoneHash).slice(0, 12), warnings: sanity.warnings }, 'sanity warnings (not blocking delivery)');
+      }
       let pdf = await htmlToPdf(html);
       if (!opts.clean) {
         pdf = await watermarkPdf(pdf);

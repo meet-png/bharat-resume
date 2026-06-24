@@ -10,16 +10,23 @@
        ───────────────────────────────────────────────────────────── */
 
     :root {
-      --c-name:      #1A3A5C;
+      /* Color rule (locked 2026-06-24 per ATS checklist): pure black for the
+         name AND body text; the navy accent is reserved EXCLUSIVELY for
+         hyperlink text so the document carries only one accent color, used
+         only where it has meaning. */
+      --c-name:      #111111;
       --c-link:      #1A3A5C;
       --c-text:      #111111;
       --c-secondary: #555555;
       --c-meta:      #888888;
       --c-rule:      #d0d0d0;
-      --sz-name:     18pt;
-      --sz-section:  9pt;
-      --sz-body:     9pt;
-      --sz-meta:     8pt;
+      /* Font sizes (locked 2026-06-24): body must be ≥10pt and section header
+         ≥12pt — some ATS parsers treat sub-10pt text as decorative and skip
+         it. Name in 16-20pt range. */
+      --sz-name:     17pt;
+      --sz-section:  12pt;
+      --sz-body:     10pt;
+      --sz-meta:     9pt;
     }
 
     @page { size: A4; margin: 14mm 16mm; }
