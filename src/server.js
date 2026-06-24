@@ -40,9 +40,28 @@ app.listen(config.PORT, () => {
   // Include router.js mtime in the boot banner so server.log makes it obvious
   // which version of the state machine is live (catches "old code still running" bugs).
   const fs = require('fs');
+  const crypto = require('crypto');
   const routerStat = fs.statSync(require.resolve('./state/router'));
+  // Eager OpenAI key fingerprint — SHA-256 first 12 hex of the trimmed key.
+  // Lets us confirm at a glance whether prod & local loaded the same key,
+  // without revealing the key itself. Computed here so it appears in the
+  // boot banner (not lazy-init'd inside client.js). Safe: hash only.
+  const rawKey = String(config.OPENAI_API_KEY || '');
+  const trimmedKey = rawKey.trim();
+  const openaiKeyFp = trimmedKey
+    ? crypto.createHash('sha256').update(trimmedKey).digest('hex').slice(0, 12)
+    : null;
   logger.info(
-    { port: config.PORT, env: config.NODE_ENV, routerMtime: routerStat.mtime.toISOString() },
+    {
+      port: config.PORT,
+      env: config.NODE_ENV,
+      routerMtime: routerStat.mtime.toISOString(),
+      openaiKeyFp,
+      openaiKeyLen: trimmedKey.length,
+      openaiKeyHadTrailingWs: rawKey !== trimmedKey,
+      openaiKeyPrefix: trimmedKey.slice(0, 8), // sk-proj- or sk- — non-secret
+      gitCommitSha: (process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_COMMIT || '').slice(0, 12) || null,
+    },
     'bharat-resume up'
   );
 });
