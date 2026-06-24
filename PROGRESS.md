@@ -375,6 +375,16 @@ Carry these forward each session until resolved. Add new ones whenever a build d
 - **Idempotency**: a second identical webhook is a no-op (`duplicate: true`). Missing `phone_hash` handled gracefully (no throw).
 - **PAID_COMPLETE** has no generic fallthrough — only `edit` (re-enters edit mode) is actionable.
 
+### 6.5a `e2e-happy-path.js` — full conversation → real PDF, ~20s (added 2026-06-24)
+**The headline invariant: "any edit to this codebase MUST NOT break the production happy path."** Drives the full Phase 2 state machine with real OpenAI through every state (NAME → EMAIL → LINKEDIN → GITHUB → CODING_PROFILES → EDUCATION → CGPA → JD → SKILLS → COURSEWORK → EXPERIENCE → PROJECTS → POR → CERTS → ACHIEVEMENTS → GENERATING → DELIVERED), runs the real generation + render + watermark + Supabase upload pipeline, and asserts:
+- State reaches `DELIVERED`; reply is `{ text, media }` with HTTPS signed URL; `pdf_storage_path` on session.
+- **Bug 0 (live-test 2026-06-23) lock**: a metrics-rich first project message — *"12,828 rows, 20/20 validation, -8.0% correction, ₹18,310 Cr → ₹4,711 Cr"* — is accepted on the first turn (PRE-CHECK rule); the resulting project bullets carry at least one digit.
+- **Bug 2 (live-test 2026-06-23) lock**: two certs in a single newline-separated message both end up in `r.certifications` (length ≥ 2).
+- **Bug 3 (live-test 2026-06-23) lock**: `certs_more_pending` is cleared after the final `done`.
+- **Skills shape (post-2026-06-22 schema)**: `r.skills` is an array of `{category, items}` with ≥2 named, role-tailored categories and no "Other"/"Misc" labels.
+- **Summary voice**: ≥40 chars, no student name, no he/she/they pronouns, no explicit `I/my/me` — locks the impersonal resume voice from Meet's reference templates.
+- `ats_score` is a positive number.
+
 ### 6.5 `test-edit.js` — free-text edit loop, ~35s
 - **Enter edit mode**: `edit` in DELIVERED → `AWAITING_EDIT_OR_DONE`; prompt asks what to change and shows 3 remaining.
 - **Apply edit**: "change my email to …" actually changes the email, leaves unrelated fields (name) untouched, increments `edits_free_used` to 1, returns a `{ text, media }` reply with an HTTPS PDF, produces a **watermarked** version, and notes 2 free edits left, then returns to DELIVERED.
