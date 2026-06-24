@@ -1,9 +1,17 @@
 // LLM wrapper: OpenAI only. PRD §3, §7.5 (Anthropic dropped per README Decisions log 2026-06-20).
 // Strict JSON mode; one retry on JSON.parse failure with the same model.
+const crypto = require('crypto');
 const { config } = require('../config');
 const logger = require('../logger');
 
 let openaiClient = null;
+
+// Safe key fingerprint for cross-env comparison. SHA-256 first 12 hex (48 bits)
+// — doesn't reveal the key, but lets us confirm that what we expect is what
+// Railway actually loaded (mismatched envs are the #1 prod-vs-local divergence).
+function keyFingerprint(raw) {
+  return crypto.createHash('sha256').update(String(raw || '')).digest('hex').slice(0, 12);
+}
 
 function getOpenAI() {
   if (openaiClient) return openaiClient;
@@ -13,9 +21,32 @@ function getOpenAI() {
   // makes undici throw a header-validation error that surfaces as an opaque
   // "Connection error." (no errno) — and echoes the key into the error message.
   // Trimming kills the most common, hardest-to-diagnose prod failure here.
-  const apiKey = String(config.OPENAI_API_KEY || '').trim();
+  const raw = String(config.OPENAI_API_KEY || '');
+  const apiKey = raw.trim();
+  // One-shot boot log: safe fingerprint + length + trailing-whitespace check.
+  // Same fingerprint on local + Railway = same key. Different = paste mismatch.
+  logger.info({
+    keyFp: keyFingerprint(apiKey),
+    keyLen: apiKey.length,
+    keyHadTrailingWs: raw !== apiKey,
+    keyPrefix: apiKey.slice(0, 8), // sk-proj- or sk- — non-secret
+  }, 'openai client init');
   openaiClient = new OpenAI({ apiKey });
   return openaiClient;
+}
+
+// Walk e.cause chain (undici nests root causes 2-3 levels deep on stream
+// failures). NEVER include the messages — undici occasionally embeds the
+// outgoing Authorization header value in cause messages, leaking the secret.
+// Names + codes only.
+function causeChain(e, depth = 5) {
+  const out = [];
+  let cur = e;
+  for (let i = 0; i < depth && cur; i++) {
+    out.push({ name: cur.name || null, code: cur.code || null });
+    cur = cur.cause;
+  }
+  return out;
 }
 
 // Transient transport / server errors worth retrying. Auth (401), forbidden
@@ -69,7 +100,17 @@ async function complete({ system, user, model = config.LLM_PRIMARY, temperature 
       const cause = e.cause || {};
       const transient = isTransientLlmError(e);
       logger.error(
-        { status: e.status, code: e.code, type: e.type, causeCode: cause.code, attempt, transient, err: e.message, model },
+        {
+          status: e.status,
+          code: e.code,
+          type: e.type,
+          causeCode: cause.code,
+          causeChain: causeChain(e), // chain of {name, code} — NO messages (header-leak risk)
+          attempt,
+          transient,
+          err: e.message,
+          model,
+        },
         'openai request failed',
       );
       lastErr = e;
