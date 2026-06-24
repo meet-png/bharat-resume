@@ -30,6 +30,16 @@ function mdBold(s) {
 
 function safeArray(a) { return Array.isArray(a) ? a : []; }
 
+// Drop empty/whitespace strings. Used everywhere we materialize bullets,
+// tech_stack items, achievements, or any other free-text list — without this,
+// an empty string in the array becomes a stray "·" separator or an empty <li>
+// (rendered as a lone bullet point with no text). See edit-flow bug fix
+// 2026-06-24: applyEdit occasionally returned arrays containing one empty
+// string trailing a real bullet; that produced visible stray "·" artifacts.
+function nonEmptyStrings(a) {
+  return safeArray(a).filter((s) => s != null && String(s).trim() !== '');
+}
+
 // Only allow http(s)/mailto in hrefs. Blocks javascript:/data:/file: schemes
 // that could ride along in a user-supplied link. Returns the RAW validated URL
 // (callers escape for their context) or '' if the scheme isn't allowed.
@@ -66,7 +76,7 @@ function buildSkillCategories(skills) {
   if (!Array.isArray(skills)) return [];
   const out = [];
   for (const cat of skills) {
-    const items = safeArray(cat && cat.items);
+    const items = nonEmptyStrings(cat && cat.items);
     const label = String((cat && cat.category) || '').trim();
     if (items.length === 0 || !label) continue;
     out.push({ label, items: ' ' + items.map(escapeHtml).join(', ') });
@@ -92,30 +102,32 @@ function prepResume(r0) {
   }));
 
   // Experience: bullets get markdown-bold conversion; tech_stack rendered inline italic.
+  // Filter empty strings out of bullets + tech_stack so an empty entry from the
+  // LLM never becomes a stray "·" artifact or a bare-bullet <li>.
   const experience = safeArray(r.experience).map((e) => ({
     role:           escapeHtml(e.role || ''),
     company:        escapeHtml(e.company || ''),
     location:       e.location ? escapeHtml(e.location) : '',
     dates:          escapeHtml(e.dates || ''),
-    tech_stack_str: safeArray(e.tech_stack).map(escapeHtml).join(' · '),
-    bullets:        safeArray(e.bullets).map(mdBold),
+    tech_stack_str: nonEmptyStrings(e.tech_stack).map(escapeHtml).join(' · '),
+    bullets:        nonEmptyStrings(e.bullets).map(mdBold),
   }));
 
-  // Projects: tech stack joined with " · ", bullets converted.
+  // Projects: tech stack joined with " · ", bullets converted. Same filter.
   const projects = safeArray(r.projects).map((p) => ({
     name:           escapeHtml(p.name || ''),
     dates:          escapeHtml(p.dates || ''),
     github_url:     safeUrl(p.github_url),
     demo_url:       safeUrl(p.demo_url),
-    tech_stack_str: safeArray(p.tech_stack).map(escapeHtml).join(' · '),
-    bullets:        safeArray(p.bullets).map(mdBold),
+    tech_stack_str: nonEmptyStrings(p.tech_stack).map(escapeHtml).join(' · '),
+    bullets:        nonEmptyStrings(p.bullets).map(mdBold),
   }));
 
   const por = safeArray(r.por).map((p) => ({
     role:         escapeHtml(p.role || ''),
     organization: escapeHtml(p.organization || ''),
     dates:        escapeHtml(p.dates || ''),
-    bullets:      safeArray(p.bullets).map(mdBold),
+    bullets:      nonEmptyStrings(p.bullets).map(mdBold),
   }));
 
   const certifications = safeArray(r.certifications).map((c) => ({
@@ -125,7 +137,7 @@ function prepResume(r0) {
     date:   c.date ? escapeHtml(c.date) : '',
   }));
 
-  const achievements = safeArray(r.achievements).map(mdBold);
+  const achievements = nonEmptyStrings(r.achievements).map(mdBold);
 
   const skill_categories = buildSkillCategories(r.skills);
 

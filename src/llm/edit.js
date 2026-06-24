@@ -4,6 +4,82 @@
 // never touches unrelated sections. On ambiguity or a request that would require
 // fabricating data, returns the resume unchanged + a short clarification.
 const { complete } = require('./client');
+const logger = require('../logger');
+
+// Sections we structurally guard: if the LLM drops/shrinks any of these for an
+// edit that didn't reference the section, we restore from the pre-edit value.
+// Surfaced by live-test 2026-06-24: adding an Experience caused the entire
+// Projects section to disappear from the rendered PDF (LLM moved projects into
+// experience and emitted projects:[]). Guard makes that class of failure
+// invisible to the student.
+const GUARDED_SECTIONS = [
+  'summary', 'education', 'skills', 'experience', 'projects',
+  'por', 'certifications', 'achievements', 'coding_profiles',
+  'name', 'email', 'phone', 'linkedin', 'github',
+];
+
+const SECTION_ALIASES = {
+  summary:        ['summary', 'intro', 'profile', 'about', 'objective'],
+  education:      ['educat', 'edu', 'degree', 'college', 'university', 'school', 'branch', 'cgpa', 'percentage', 'coursework'],
+  skills:         ['skill'],
+  experience:     ['experience', 'internship', 'intern ', 'work', ' job', 'role at', 'company', 'employer'],
+  projects:       ['project'],
+  por:            ['leadership', 'position of responsibility', 'club', 'society', 'committee'],
+  certifications: ['cert', 'certif', 'certificate', 'course '],
+  achievements:   ['achievement', 'award', 'prize', 'rank', 'percentile', 'won', 'winner', 'hackathon'],
+  coding_profiles:['leetcode', 'codeforces', 'codechef', 'coding profile', 'hackerrank', 'gfg', 'geeksforgeeks'],
+  name:           [' name'],
+  email:          ['email', 'mail '],
+  phone:          ['phone', 'mobile', 'number'],
+  linkedin:       ['linkedin'],
+  github:         ['github'],
+};
+
+function isEmptyValue(v) {
+  if (v == null) return true;
+  if (Array.isArray(v)) return v.length === 0;
+  if (typeof v === 'string') return v.trim() === '';
+  if (typeof v === 'object') return Object.keys(v).length === 0;
+  return false;
+}
+
+function instructionReferences(instruction, section) {
+  const i = ' ' + String(instruction).toLowerCase() + ' ';
+  const aliases = SECTION_ALIASES[section] || [section];
+  return aliases.some((a) => i.includes(a));
+}
+
+// Two structural failures we've observed: (1) LLM emits a section as empty
+// when it shouldn't, (2) LLM duplicates an existing entry in projects (or
+// experience) with a thinner version. Dedup is case-insensitive on name; the
+// LONGER entry wins (more bullets / more tech_stack), under the assumption
+// that the LLM's "thinner duplicate" is the corruption, not the original.
+function dedupeByName(arr, label) {
+  if (!Array.isArray(arr)) return arr;
+  const seen = new Map(); // key: lowercased trimmed name → index in `out`
+  const out = [];
+  for (const item of arr) {
+    if (!item || typeof item !== 'object') { out.push(item); continue; }
+    const name = String(item.name || '').trim().toLowerCase();
+    if (!name) { out.push(item); continue; }
+    if (seen.has(name)) {
+      const idx = seen.get(name);
+      const prev = out[idx];
+      const prevScore = (Array.isArray(prev.bullets) ? prev.bullets.length : 0) + (Array.isArray(prev.tech_stack) ? prev.tech_stack.length : 0);
+      const newScore = (Array.isArray(item.bullets) ? item.bullets.length : 0) + (Array.isArray(item.tech_stack) ? item.tech_stack.length : 0);
+      if (newScore > prevScore) {
+        out[idx] = item;
+        logger.warn({ section: label, name: item.name, prevScore, newScore }, 'duplicate entry name — replaced with denser version');
+      } else {
+        logger.warn({ section: label, name: item.name, prevScore, newScore }, 'duplicate entry name — kept original');
+      }
+    } else {
+      seen.set(name, out.length);
+      out.push(item);
+    }
+  }
+  return out;
+}
 
 function jdLine({ jdRole, jdText, jdGeneric }) {
   if (jdGeneric) return 'TARGET: generic resume (no specific role).';
@@ -48,6 +124,37 @@ VOICE for clarification_needed: Hinglish or English, Latin script only, one shor
   // never drop or alter it unless explicitly asked (and the student can't change
   // their WhatsApp-derived number via chat anyway).
   if (resume && rewritten.phone && !resume.phone) resume.phone = rewritten.phone;
+
+  // STRUCTURAL INTEGRITY GUARD (added 2026-06-24 after live-test "added one
+  // Experience → Projects section disappeared"). For every guarded section: if
+  // the original had content, the edit instruction did NOT reference that
+  // section, and the LLM output dropped or SHRUNK it, restore from original.
+  // Catches the class of failures where editing one section silently
+  // corrupts unrelated structure.
+  if (resume) {
+    for (const f of GUARDED_SECTIONS) {
+      const had = !isEmptyValue(rewritten[f]);
+      const has = !isEmptyValue(resume[f]);
+      const mentioned = instructionReferences(instruction, f);
+      if (had && !has && !mentioned) {
+        logger.warn({ field: f, instructionHead: String(instruction).slice(0, 80) }, 'edit dropped unrelated section — restoring from original');
+        resume[f] = rewritten[f];
+        continue;
+      }
+      // For array sections, also catch a SHRUNK array (LLM moved entries or
+      // lost them mid-edit). Strict: shrink without instruction reference = restore.
+      if (Array.isArray(rewritten[f]) && Array.isArray(resume[f])
+          && resume[f].length < rewritten[f].length
+          && !mentioned) {
+        logger.warn({ field: f, oldLen: rewritten[f].length, newLen: resume[f].length, instructionHead: String(instruction).slice(0, 80) }, 'edit shrunk unrelated section — restoring from original');
+        resume[f] = rewritten[f];
+      }
+    }
+    // Dedup duplicate entries in projects + experience (LLM occasionally
+    // emits a second thinner copy of an existing entry).
+    if (Array.isArray(resume.projects))   resume.projects   = dedupeByName(resume.projects,   'projects');
+    if (Array.isArray(resume.experience)) resume.experience = dedupeByName(resume.experience, 'experience');
+  }
 
   return { data: resume, clarification_needed: clarification, usage: result.usage };
 }

@@ -422,12 +422,29 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
   }
 
   // --- AWAITING_PROJECTS: multi-entry with pending_project accumulator. ---
+  // commitProject: replace any prior project with the same case-insensitive
+  // name instead of appending a duplicate (live-test 2026-06-24: a student who
+  // re-entered the projects state across sessions ended up with the same
+  // project saved twice — once full, once thin). Newer wins because the most
+  // recent attempt is the one the student just authored.
+  function commitProject(rj, pending) {
+    if (!Array.isArray(rj.projects)) rj.projects = [];
+    const newName = String(pending.name || '').trim().toLowerCase();
+    if (!newName) { rj.projects.push(pending); return; }
+    const idx = rj.projects.findIndex((p) => String(p && p.name || '').trim().toLowerCase() === newName);
+    if (idx >= 0) {
+      logger.info({ phoneHash: phoneShort, projectName: pending.name }, 'project name collision — replacing prior entry');
+      rj.projects[idx] = pending;
+    } else {
+      rj.projects.push(pending);
+    }
+  }
+
   if (current === STATES.AWAITING_PROJECTS) {
     if (DONE_RE.test(trimmed) || SKIP_RE.test(trimmed)) {
       const pending = session.resume_json.pending_project;
       if (pending && Object.keys(pending).length > 0) {
-        if (!session.resume_json.projects) session.resume_json.projects = [];
-        session.resume_json.projects.push(pending);
+        commitProject(session.resume_json, pending);
       } else if (!session.resume_json.projects) {
         session.resume_json.projects = [];
       }
@@ -451,14 +468,13 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
         await setSession(phoneHash, session);
         return data.clarification_needed;
       }
-      if (!session.resume_json.projects) session.resume_json.projects = [];
       if (session.resume_json.pending_project && session.resume_json.pending_project.name) {
-        session.resume_json.projects.push(session.resume_json.pending_project);
+        commitProject(session.resume_json, session.resume_json.pending_project);
       }
       session.resume_json.pending_project = null;
       session.proj_focus = null;
       await setSession(phoneHash, session);
-      return pickMessage('projectSaved', { n: session.resume_json.projects.length });
+      return pickMessage('projectSaved', { n: (session.resume_json.projects || []).length });
     } catch (e) {
       // A throw here is a BACKEND failure (LLM call errored or returned
       // unparseable JSON), never a "bad user input" — that path returns the
