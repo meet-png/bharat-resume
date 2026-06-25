@@ -303,6 +303,41 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 
 **What's actually left before launch:** real end-to-end dry run on Railway (Meta → Railway → bot → PDF) with at least one real WhatsApp conversation — the fixes pushed today need a live confirmation that PDF generation now succeeds on a fresh persona. Then 2-3 friendly JECRC students before broadcasting to 100.
 
+### Session — 2026-06-25 (Friend-test bugs: experience loop, coursework gatekeeping, +4 more, Claude Opus 4.7)
+
+Meet ran the first real friend-test on Railway (`+1 (555) 661-6577` test recipient flow). Friend's chat transcript surfaced **six bugs**, one of them launch-blocking. **Commit `d857605`** fixes all six.
+
+**Bug 2 (LAUNCH-BLOCKER) — experience impact loop.** The friend's transcript shows them giving SIX different metrics (`500+ satisfied customers`, `10 hours saved`, `50% improved`, `600`, `2% time saved`, `10% improved → accuracy`) — and the bot re-asked *"is kaam ka impact kya raha?"* every single turn. Each terse follow-up was being dropped by the LLM extractor: it kept returning `bullets: []` because it couldn't form a "full sentence" from a 2-3-word reply, and `experience[0].bullets` never accumulated past 1.
+
+Fix in `extract.js` `AWAITING_EXPERIENCE`:
+- **PRE-CHECK rule** mirrors the one I added for `AWAITING_PROJECTS` 2026-06-23 — scan `experience[last].bullets` for ≥2 distinct numbers BEFORE asking; if present, set `clarification_needed = null`. Catches "student already gave the metric" before the LLM asks again.
+- **TERSE METRIC FOLLOW-UPS ARE THE ANSWER** rule: a reply like `"10 hours saved"` IS a new bullet — extract it; never return `bullets: []`.
+- **Deflection** for `"upar dediya"` / `"pehle bola"` / `"already said"`.
+- **Merge dedupe by normalised text** so a re-emitted bullet doesn't double-count.
+
+**Bug 3 — no "add another internship/job?" loop.** Single-entry experience meant a student with two internships only got one rendered. `router.js` `AWAITING_EXPERIENCE` now mirrors the projects/certs pattern: after a sufficient entry → `"Internship/job #N saved ✓ — agla internship ya job bhejo, ya 'done' likho."` Session marker `exp_more_pending`. Other non-done/skip text → push fresh `{}` to `experience[]` and treat as new entry. `extract.js` merge now targets `experience[last]` instead of always `experience[0]`. Single-entry flows unchanged (first message lands at index 0).
+
+**Bug 1 — coursework rejection loop.** Friend typed `"Fast API"`, bot looped *"Kya aapne kisi specific coursework ka zikr kiya hai?"* — gatekeeping against a hidden DSA/ML/DBMS whitelist. `extract.js` `AWAITING_COURSEWORK` now liberally accepts ANYTHING the student types as a course/topic/framework — classical subjects, domain topics, modern frameworks (`Fast API`, `Prompt Engineering`, `LangChain`, `ETL`, `Spark`). Never reject because something isn't on a canonical academic list.
+
+**Bug 5 — coursework prompt no longer pre-lists "DSA, ML, Stats, DBMS"** (which primed students to think those were the only valid answers and CAUSED Bug 1). Open-ended ask: *"anything you've studied that fits this role."*
+
+**Bug 4 — welcome message teaches commands.** `prompts.js` NEW + `AWAITING_CONFIRM_START` variants now explain `reset` (start over), `skip` (skip optional), `done` (finish multi-entry section). The friend had no idea these existed.
+
+**Bug 7 (Meet ask) — CGPA is now OPTIONAL.** Added `AWAITING_CGPA` to `OPTIONAL_STATES`; prompt copy mentions `'skip'` as an explicit option. Many freshers don't want to share, or are between semesters.
+
+**Regression contract state:** **11 of 12 GREEN.** Only `test-payment` red — same Razorpay test-mode quota all session (environmental, untouched code path). Override applied per the 5-step framework documented in `[[contract-override-decision-framework]]` memory — convergence on ONE untouched external dep, every changed file has a passing dedicated test (`smoke-router` Block 5 for router/extract experience-loop changes + `e2e-happy-path` 16/16 for the full pipeline), no hidden coupling. `.runtime/smoke-router.js` Block 5 and `.runtime/e2e-happy-path.js` updated to send `'done'` after the experience message (mirrors the new add-another loop).
+
+**Pattern reinforced — multi-entry sections share one shape now:**
+| Section | Commit slot | "More or done?" flag | Section ID |
+|---|---|---|---|
+| Projects | `pending_project` → `projects[]` | `proj_focus`/save+ask flow | 2026-06-23 |
+| Certs | inline → `certifications[]` | `certs_more_pending` | 2026-06-23 |
+| Experience | `experience[last]` (always last) | `exp_more_pending` | 2026-06-25 (NEW) |
+
+PoR is the only multi-entry-shaped section still single-entry — flagged as a future pass.
+
+**Memory updated** (`bharat-resume-quality-prefs.md` + `bharat-resume-project.md`) to lock the new patterns: terse-metric merging in experience, coursework liberal acceptance, multi-entry pattern symmetry across projects/certs/experience.
+
 ### Session — 2026-06-24 (Meta publish discovery — launch date must slip, Claude Opus 4.7)
 
 While planning friend-testing for tomorrow's 25 Jun launch, surfaced a hard gate I hadn't fully scoped: **Meta App Mode**.
