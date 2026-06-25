@@ -46,10 +46,14 @@ const NEXT_STATE = Object.freeze({
 });
 
 // Sections where "skip" is valid (PRD §5 Phase 2 table — "Optional? Yes" rows).
+// AWAITING_CGPA added 2026-06-25 per Meet's pilot feedback — many freshers
+// either don't have a current CGPA, don't want to share it, or are between
+// semesters; the bot should not block on it.
 const OPTIONAL_STATES = new Set([
   STATES.AWAITING_LINKEDIN,
   STATES.AWAITING_GITHUB,
   STATES.AWAITING_CODING_PROFILES,
+  STATES.AWAITING_CGPA,
   STATES.AWAITING_COURSEWORK,
   STATES.AWAITING_EXPERIENCE,
   STATES.AWAITING_PROJECTS,

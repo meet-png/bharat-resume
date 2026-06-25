@@ -78,7 +78,16 @@ For each link the student gives, output { "platform": <clean platform name>, "ur
 
   // Optional coursework collection — single line; merges into education[0].coursework.
   AWAITING_COURSEWORK: {
-    instruction: `Extract a coursework string — a comma- or middle-dot-separated list of course names the student named (DSA, Operating Systems, ML, Statistics, etc.). Title-case items. Keep the original separator if the student used one. If "skip" or no clear coursework, set to null.`,
+    instruction: `Extract a coursework string from whatever the student names.
+
+LIBERAL ACCEPTANCE — NEVER GATEKEEP. Anything the student types that names a course, topic, framework, or technical area COUNTS as coursework. Examples of valid replies that you MUST accept on the first turn:
+- Classical course names: "DSA", "DBMS", "Operating Systems", "Computer Networks", "Discrete Math"
+- Domain topics: "ML", "Deep Learning", "Statistics", "Linear Algebra", "Data Structures"
+- Modern frameworks/tools named as study areas: "Fast API", "Prompt Engineering", "LangChain", "Spark", "Kafka", "ETL"
+- Mixed lists: "Tools - power bi, eda" or "Prompt engineering, FastAPI, LangChain"
+Title-case each item where reasonable. Preserve the student's separator if any. Comma-join if they used line breaks. Do NOT ask for "specific coursework" — whatever they said IS the coursework. The friend-test 2026-06-25 looped on "Fast API" being rejected — never reject a topic just because it isn't on a canonical academic-course list.
+
+ONLY set clarification_needed if the message is genuinely empty / "skip" / a question / gibberish. If "skip"/"no"/"nahi"/"none" → coursework: null, clarification_needed: null (the optional state handler advances).`,
     shape: '{ "coursework": string | null, "clarification_needed": string | null }',
     merge: (rj, x) => {
       if (!x.coursework) return;
@@ -119,6 +128,15 @@ Set clarification_needed to null whenever the message contains AT LEAST ONE skil
   // EXPERIENCE — multi-bullet, multi-angle sufficiency. Drives bullet density.
   AWAITING_EXPERIENCE: {
     instruction: `Extract internship/job experience. tech_stack = the specific tools / libraries / methods the student actually used in THIS experience (not their global skills).
+
+PRE-CHECK BEFORE ASKING ANYTHING — STOP RE-ASKING FOR DETAIL THE STUDENT ALREADY GAVE:
+Before you set clarification_needed, scan resume_json.experience[0].bullets (the PENDING entry, accumulating across turns). If those bullets ALREADY contain ≥2 distinct numbers / metrics across angles — e.g. "500+ customers", "10 hours saved", "50% accuracy", "₹3 L budget", "12,828 rows", "p99 400ms→120ms" — the entry IS sufficient: set clarification_needed = null. Do NOT ask the student for "impact" or "result" or "metric" when several are already present in pending bullets. The student notices instantly when the bot ignores detail they already gave; that's the friend-test bug from 2026-06-25.
+
+TERSE METRIC FOLLOW-UPS ARE THE ANSWER, NOT GARBAGE:
+A terse reply like "500+ satisfied customers", "10 hours saved", "50% improved", "600 users", "2% time saved", "10% accuracy improvement" is the answer to the question you just asked. It is a NEW BULLET for the pending experience. Extract it into bullets[] EXACTLY ONCE per turn and let merge append. NEVER return bullets: [] for a metric reply because you couldn't form a "full sentence" — the rewriter will phrase it later.
+
+DEFLECTION HANDLING (Hindi/English):
+If the student replies "upar dediya", "pehle bola", "already said", "already mentioned", "mentioned above", "see above", "I told you", "ek baar bata diya" — DO NOT re-ask. Re-evaluate pending bullets per PRE-CHECK above; if any metric is present, accept and set clarification_needed = null.
 
 SUFFICIENCY for the experience entry — ALL THREE must hold:
   (a) role + company (who/where)
@@ -167,19 +185,32 @@ Follow-up: "reduced failed transactions by 18%"
 
 Apply same role-awareness as before: clarification vocabulary, action verbs, example titles all calibrate to TARGET ROLE.`,
     shape: '{ "experience": { "role": string | null, "company": string | null, "location": string | null, "dates": string | null, "bullets": [string], "tech_stack": [string] } | null, "clarification_needed": string | null }',
+    // Merge targets the LAST entry in experience[] (not always index 0) so the
+    // multi-entry loop in the router can push a fresh slot for "agla internship"
+    // and have subsequent turns accumulate into that new entry. Single-entry
+    // flows (the common case) still work — first message creates index 0 and
+    // every follow-up targets index 0 as before.
     merge: (rj, x) => {
       if (!x.experience) {
         if (!rj.experience) rj.experience = [];
         return;
       }
       if (!rj.experience) rj.experience = [];
-      if (!rj.experience[0]) rj.experience.push({});
-      const exp = rj.experience[0];
+      if (rj.experience.length === 0) rj.experience.push({});
+      const exp = rj.experience[rj.experience.length - 1];
       for (const k of ['role', 'company', 'location', 'dates']) {
         if (x.experience[k]) exp[k] = x.experience[k];
       }
       if (Array.isArray(x.experience.bullets) && x.experience.bullets.length > 0) {
-        exp.bullets = (exp.bullets || []).concat(x.experience.bullets);
+        // Dedupe by normalised text (drop **, lower, trim) — terse follow-ups
+        // sometimes re-emit existing bullets alongside the new metric.
+        const norm = (s) => String(s).replace(/\*\*/g, '').trim().toLowerCase();
+        exp.bullets = exp.bullets || [];
+        const seen = new Set(exp.bullets.map(norm));
+        for (const b of x.experience.bullets) {
+          const n = norm(b);
+          if (n && !seen.has(n)) { exp.bullets.push(b); seen.add(n); }
+        }
       }
       if (Array.isArray(x.experience.tech_stack) && x.experience.tech_stack.length > 0) {
         const set = new Set([...(exp.tech_stack || []), ...x.experience.tech_stack]);

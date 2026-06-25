@@ -493,39 +493,55 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
     }
   }
 
-  // --- AWAITING_EXPERIENCE: dedicated handler to prevent re-asking filled slots. ---
-  // The extractor already parses each message against ALL fields (role, company,
-  // dates, bullets, tech_stack), and merge() accumulates across turns. The bug
-  // was the LLM's free-form clarification re-asking a slot that's already filled.
-  // Fix: drive hard-slot questions DETERMINISTICALLY (ask only what's empty), and
-  // only defer to the LLM for bullet/impact depth — guarding against any
-  // clarification that re-mentions a filled hard slot.
+  // --- AWAITING_EXPERIENCE: dedicated handler. Multi-entry loop (2026-06-25). ---
+  // Friend-test 2026-06-25 surfaced two pains: (1) the LLM kept re-asking for
+  // an impact metric even after several metrics had been given (terse follow-ups
+  // were getting dropped — fixed in extract.js PRE-CHECK + TERSE-METRIC rules),
+  // (2) the flow never asked "add another internship/job?" so students with
+  // multiple jobs only got one rendered. Mirror the projects + certs pattern.
   if (current === STATES.AWAITING_EXPERIENCE) {
-    if (SKIP_RE.test(trimmed)) {
+    // (a) "Add another experience or done?" pending — DONE/SKIP advances;
+    //     otherwise treat this message as the start of a NEW experience entry.
+    if (session.exp_more_pending) {
+      if (DONE_RE.test(trimmed) || SKIP_RE.test(trimmed)) {
+        session.exp_more_pending = false;
+        session.exp_focus = null;
+        session.state = NEXT_STATE[current];
+        const genReply = await tryGenerate(session, phoneFrom, phoneHash);
+        await setSession(phoneHash, session);
+        return genReply || pickPrompt(session.state, session);
+      }
+      session.exp_more_pending = false;
+      session.exp_focus = null;
+      if (!Array.isArray(session.resume_json.experience)) session.resume_json.experience = [];
+      session.resume_json.experience.push({});
+      // fall through to extraction; the merger targets the last (new) entry.
+    }
+
+    // (b) First-entry skip — no experience yet → advance straight to projects.
+    if (SKIP_RE.test(trimmed) && !(Array.isArray(session.resume_json.experience) && session.resume_json.experience.length > 0)) {
       session.state = NEXT_STATE[current];
       const genReply = await tryGenerate(session, phoneFrom, phoneHash);
       await setSession(phoneHash, session);
       return genReply || pickPrompt(session.state, session);
     }
+
     let data, usage;
     try {
-      // Pass the slot we asked for last turn so a terse reply ("Jan 2023 to Dec
-      // 2024") gets mapped to it instead of being dropped as context-less.
       ({ data, usage } = await extractSection({ state: current, body: trimmed, resumeJson: session.resume_json, session, focus: session.exp_focus || null }));
     } catch (e) {
       logger.error({ err: e.message, status: e.status, code: e.code, state: current, bodyLen: trimmed.length }, 'extract failed');
       return pickMessage('serverError');
     }
-    logger.info({ phoneHash: phoneShort, state: current, usage }, 'extracted');
     SECTION_CONFIG[current].merge(session.resume_json, data);
+    const expList = Array.isArray(session.resume_json.experience) ? session.resume_json.experience : [];
+    const exp = expList.length ? expList[expList.length - 1] : null;
+    const bulletCount = (exp && exp.bullets || []).length;
+    logger.info({ phoneHash: phoneShort, state: current, usage, expEntries: expList.length, bullets: bulletCount }, 'extracted');
 
-    const exp = (session.resume_json.experience && session.resume_json.experience[0]) || null;
     const missing = experienceHardMissing(exp);
 
-    // 1. Hard slots still empty → ask ONLY for those, deterministically. Never
-    //    re-asks a slot already filled, never relies on the LLM here. Remember
-    //    which slot we're asking for so next turn's extraction can map a terse
-    //    reply straight to it.
+    // 1. Hard slots empty → ask ONLY for those, deterministically. Never re-asks a filled slot.
     if (missing.length > 0) {
       session.exp_focus = missing[0];
       await setSession(phoneHash, session);
@@ -533,16 +549,11 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
     }
     session.exp_focus = null;
 
-    // 2. All hard slots present → use the LLM's clarification for bullet/impact
-    //    depth, but guard it. If it re-asks a filled slot, log and substitute a
-    //    deterministic impact ask instead of repeating the question.
-    const bulletCount = (exp.bullets || []).length;
+    // 2. All hard slots present → use the LLM's clarification for bullet/impact depth.
+    //    If it re-asks a filled slot, substitute a deterministic impact ask.
     if (data.clarification_needed && bulletCount < EXP_BULLET_CAP) {
       if (EXP_SLOT_REASK_RE.test(data.clarification_needed)) {
-        logger.warn(
-          { phoneHash: phoneShort, state: current, clar: data.clarification_needed.slice(0, 60) },
-          'LLM re-asked a filled experience slot; substituting impact ask',
-        );
+        logger.warn({ phoneHash: phoneShort, state: current, clar: data.clarification_needed.slice(0, 60) }, 'LLM re-asked a filled experience slot; substituting impact ask');
         await setSession(phoneHash, session);
         return pickMessage('expAskImpact');
       }
@@ -550,11 +561,12 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
       return data.clarification_needed;
     }
 
-    // 3. Sufficient (or bullet safety cap hit) → advance + generate.
-    session.state = NEXT_STATE[current];
-    const genReply = await tryGenerate(session, phoneFrom, phoneHash);
+    // 3. Sufficient → enter the "add another or done?" loop instead of advancing.
+    session.exp_more_pending = true;
+    session.exp_focus = null;
     await setSession(phoneHash, session);
-    return genReply || pickPrompt(session.state, session);
+    const n = expList.length;
+    return `Internship/job #${n} saved ✓ — agla internship ya job bhejo (ek message mein), ya 'done' likho.`;
   }
 
   // --- AWAITING_CERTS: multi-item with per-cert link follow-up + "more or done?" loop. ---

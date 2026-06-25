@@ -6,19 +6,19 @@ const { STATES } = require('./states');
 
 const PROMPTS = {
   [STATES.NEW]: [
-    "Hey! I'm Saathi from BHARAT RESUME. Aapka professional resume 10 min mein bana denge — chat in Hinglish or English, jo comfortable ho. Ready? Reply 'yes' / 'haan' to start.",
-    "Namaste! Saathi here — BHARAT RESUME ka AI bot. Resume bana denge ~10 min mein. Hinglish or English, both fine. Shall we start? Type 'yes' or 'haan'.",
-    "Hi! Main Saathi hu — I'll build your professional resume in about 10 minutes. Hinglish/English chalega. Shuru karein? Reply 'yes' / 'ready'.",
-    "Hello! Saathi from BHARAT RESUME — 10 min mein professional resume ready. Chat in whatever you prefer: English, Hinglish, mix. Type 'haan' / 'yes' to begin.",
+    "Hey! I'm Saathi from BHARAT RESUME. Aapka professional resume ~10 min mein bana denge — chat in Hinglish or English, jo comfortable ho.\n\n_Commands:_ 'reset' = start over · 'skip' = skip an optional question · 'done' = finish a multi-item section (projects/certs/jobs).\n\nReady? Reply 'yes' / 'haan' to start.",
+    "Namaste! Saathi here — BHARAT RESUME ka AI bot. ~10 min mein resume tayar.\n\n_Useful at any time:_ 'reset' starts fresh · 'skip' skips an optional question · 'done' wraps up a section with multiple entries.\n\nShall we begin? Type 'yes' / 'haan'.",
+    "Hi! Main Saathi hu — I'll build your professional resume in about 10 minutes. Hinglish/English chalega.\n\n_Quick commands:_ 'reset' = fresh start · 'skip' = skip optional · 'done' = finish multi-entry sections.\n\nShuru karein? Reply 'yes' / 'ready'.",
+    "Hello! Saathi from BHARAT RESUME — 10 min mein professional resume ready. Chat in whatever you prefer.\n\n_Anytime commands:_ 'reset' restarts · 'skip' jumps optional questions · 'done' closes a multi-entry section.\n\nType 'haan' / 'yes' to begin.",
   ],
 
   // Warmer fallbacks for when the user sends something other than yes/haan/ready.
   // Acknowledges the contact + sets expectation + ends with a clear CTA.
   [STATES.AWAITING_CONFIRM_START]: [
-    "Hi! Saathi here — chaliye aapka resume banate hain. Reply 'yes' or 'haan' to start.",
-    "Hey! Bas 'yes' likh dijiye aur 10 min mein resume ready. Chalein?",
-    "Namaste! Resume banate hain saath mein. Type 'yes' / 'haan' / 'ready' to begin.",
-    "Saathi ready hai ✓ Reply 'yes' / 'haan' to kick off — aapka professional resume 10 min mein tayar.",
+    "Hi! Saathi here — chaliye aapka resume banate hain. Reply 'yes' or 'haan' to start. (Anytime: 'reset' = start over, 'skip' = skip an optional question.)",
+    "Hey! Bas 'yes' likh dijiye aur ~10 min mein resume ready. ('reset' anytime to start fresh.) Chalein?",
+    "Namaste! Resume banate hain saath mein. Type 'yes' / 'haan' / 'ready' to begin. ('skip' kabhi bhi optional skip karne ke liye, 'reset' fresh start.)",
+    "Saathi ready hai ✓ Reply 'yes' / 'haan' to kick off. Tip — 'reset' starts over, 'skip' jumps an optional question.",
   ],
 
   [STATES.AWAITING_NAME]: [
@@ -63,11 +63,13 @@ const PROMPTS = {
     "Share your education: which degree, which college, branch, year of passing — single message please.",
   ],
 
+  // CGPA is optional (added to OPTIONAL_STATES 2026-06-25). Make the prompt
+  // explicit so the student knows they can skip without explanation.
   [STATES.AWAITING_CGPA]: [
-    "CGPA ya percentage kya hai?",
-    "What's your CGPA (or percentage)?",
-    "Score batayiye — CGPA ya % whichever.",
-    "Aapka academic score? CGPA / percentage, koi bhi.",
+    "CGPA ya percentage kya hai? 'skip' agar share nahi karna.",
+    "What's your CGPA (or percentage)? Type 'skip' if you'd rather not share.",
+    "Score batayiye — CGPA ya % whichever. 'skip' if you prefer not to.",
+    "Aapka academic score? CGPA / percentage / 'skip' — koi bhi chalega.",
   ],
 
   // JD step now offers THREE paths: full JD, role-name only, or generic.
@@ -97,14 +99,20 @@ const PROMPTS = {
     ],
   },
 
-  // Role-aware. Technical roles get CS-subject examples; everyone else gets a
-  // neutral ask (no misleading DSA/ML/DBMS examples for a law/marketing student).
+  // Role-aware coursework prompt. We deliberately AVOID pre-listing canonical
+  // course names ("DSA, ML, Stats, DBMS") because it primes the student to think
+  // we only accept those — and the friend-test 2026-06-25 looped on "Fast API"
+  // being rejected against that hidden whitelist. The prompt is now open-ended:
+  // "anything relevant to YOUR role." The extractor (extract.js) accepts
+  // whatever they name. For technical roles we hint at the breadth (frameworks,
+  // domain topics, modern tools) without naming specific examples; non-tech
+  // roles get a domain-agnostic ask.
   [STATES.AWAITING_COURSEWORK]: {
     technical: [
-      "Koi relevant coursework hai jo highlight karna chahte ho? Jaise DSA, ML, Stats, DBMS, etc. 'skip' if none.",
-      "Any relevant coursework worth highlighting? (DSA, Machine Learning, Statistics, OS, DBMS, etc.) Or 'skip'.",
-      "Coursework jo aapko strong banata ho — DSA, AI, Probability, Networks? List kar dijiye, ya 'skip'.",
-      "Top coursework — kuch jo role ke liye relevant ho. Comma-separated batayiye ya 'skip' if none.",
+      "Koi relevant coursework / topics / frameworks aapne padhe ho jo is role ke liye important hain? Anything counts — academic subjects, modern tools, libraries. Comma-separated bhej dijiye, ya 'skip'.",
+      "Any coursework, topics, or frameworks you've studied that fit this role? Could be classical subjects OR modern tools — whatever you've actually learned. List them, or 'skip'.",
+      "Coursework ya topics jo aapne is role ke liye padhe hain — academic subjects, frameworks, koi bhi. Comma-separated, ya 'skip' if none.",
+      "Relevant coursework / study topics / frameworks for this role? Anything you've covered counts. Drop the list or 'skip'.",
     ],
     general: [
       "Koi relevant subjects ya coursework jo aapke field mein important hain? Comma-separated batayiye, ya 'skip' if none.",
