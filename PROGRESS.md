@@ -317,9 +317,22 @@ Spec written (`docs/HYBRID-REPLY-SPEC.md`). Core idea: separate "what did the st
 
 **Regression contract state: 11/12 GREEN** with `HYBRID_REPLY=false` (default). Same `test-payment` red (Razorpay test-mode quota — 30/day exhausted, environmental, untouched code path — same contract-override framework as earlier today). Critically: `e2e-happy-path` 16/16, `smoke-router`, and `test-edit-isolation` (59 assertions) all green — confirms the wiring is a true pass-through.
 
-**Phase B (next session — not started):** wire `composeReply()` into the remaining return sites (PoR, projects, certs, single-shot states); add `.runtime/test-respond.js` (isolated unit suite for the sanity gates and fallback path); run smoke-router + e2e with `HYBRID_REPLY=1` in dev; manually re-run the friend-test loop scenarios (experience-impact, PoR-impact) to confirm no loop and warm voice.
+**Phase B (same session — completed):**
+- Wired `composeReply()` into 8 more return sites: AWAITING_POR (clarification), AWAITING_PROJECTS (clarification + multi-entry-saved-loop), AWAITING_CERTS (4 sites — next-cert-link ask × 2, clarification, multi-entry-saved-loop), and the general PHASE_2_STATES clarification site. Every wiring is `{decision, missing, fallback}` shape with the canned text as fallback. Flag-off behavior remains byte-identical.
+- `.runtime/test-respond.js` — 29 isolated assertions on the sanity gates (length cap, Latin-only, multi-digit fabrication check across 6 scenarios, per-field re-ask check across 6 scenarios, composite sanity-gate runner) + the public respond/runSanityGates exports. Wired into `npm run check`. **29/29 green.**
+- One real false-positive surfaced in the per-field re-ask regex during test authoring: "I have your email ✓" was being flagged. Tightened ALL field regexes (name/email/linkedin/github/cgpa) to match ASK FORMS only — required ASK VERB ("share/drop/give/send/what's") before the field OR ASK MARKER ("kya/share/please/bhej/?") after. Acknowledgement forms ("I have your X", "got your X", "your X is saved") no longer trip the gate.
+- Flag-on smoke run: `HYBRID_REPLY=true node .runtime/smoke-router.js` — all assertions passed. Zero sanity-fails, zero LLM failures.
+- Direct probe (`.runtime/_probe-hybrid.js`, gitignored) confirmed end-to-end behavior matches the spec:
+  - **Loop ack (Backend role):** "Razorpay experience saved ✓. Any other projects or roles to share? Focus on your backend work — like system reliability or user load handled. Agla experience bhejo, ya 'done' likho." (role-aware, 3.5s)
+  - **MUN Sec-Gen impact ask (skilled elicitation):** "Secretary General at JMS MUN ✓. Kya aapne koi sponsorship secure kiya tha ya budget handle kiya? Ya koi impact jo aapne create kiya us role mein?" (role-tailored questions, **zero fabricated numbers**, 2.4s)
+  - **Marketing intern vague input (anti-fabrication stress):** Asked for "signups, engagement rate, ya reach" instead of inventing them. Multi-digit runs in reply: ZERO. (1.9s)
+- Regression contract: **12/13 green** with flag off. Only `test-payment` red — same Razorpay quota all session.
 
-**Memory updated:** none yet — Phase A is scaffolding, no behavior change. Memory entries for the new respond-layer voice rules and "skilled elicitation, never hallucinated draft" guidance will land in Phase B once we've validated the LLM output against real student traffic.
+**What landed beyond Phase A:** 8 more wired sites in router.js + test-respond.js (regression-protected) + tightened sanity regex set.
+
+**Still deferred (Phase C, separate session):** roll `HYBRID_REPLY=true` to PILOT_MODE sessions only in Railway env; watch a real friend test re-run the experience/PoR loop scenarios; iterate respond.js voice if needed. The flag default remains OFF in this commit — production paid sessions are still on canned prompts until pilot validates the LLM voice.
+
+**Memory updated:** none yet — Phase B is still pre-pilot validation. Once we've validated against a real friend test in Phase C, the [[bharat-resume-quality-prefs]] memory will get the "skilled elicitation, never hallucinated draft" rule and the respond-layer voice constraints.
 
 ### Session — 2026-06-25 (Friend-test bugs: experience loop, coursework gatekeeping, +4 more, Claude Opus 4.7)
 

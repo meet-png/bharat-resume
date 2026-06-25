@@ -445,7 +445,14 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
       SECTION_CONFIG[current].merge(session.resume_json, data);
       if (data.clarification_needed) {
         await setSession(phoneHash, session);
-        return data.clarification_needed;
+        return await composeReply({
+          session,
+          prev_state: current,
+          decision: 'still_missing',
+          student_last: trimmed,
+          missing: ['clarification'],
+          fallback: data.clarification_needed,
+        });
       }
       // Sufficient — commit pending_por to por[] and advance.
       const pending = session.resume_json.pending_por;
@@ -519,7 +526,14 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
         // (terse) reply is mapped onto pending_project instead of restarting.
         session.proj_focus = session.resume_json.pending_project && session.resume_json.pending_project.name ? 'followup' : null;
         await setSession(phoneHash, session);
-        return data.clarification_needed;
+        return await composeReply({
+          session,
+          prev_state: current,
+          decision: 'still_missing',
+          student_last: trimmed,
+          missing: ['clarification'],
+          fallback: data.clarification_needed,
+        });
       }
       if (session.resume_json.pending_project && session.resume_json.pending_project.name) {
         commitProject(session.resume_json, session.resume_json.pending_project);
@@ -527,7 +541,14 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
       session.resume_json.pending_project = null;
       session.proj_focus = null;
       await setSession(phoneHash, session);
-      return pickMessage('projectSaved', { n: (session.resume_json.projects || []).length });
+      return await composeReply({
+        session,
+        prev_state: current,
+        decision: 'loop_more',
+        student_last: trimmed,
+        missing: [],
+        fallback: pickMessage('projectSaved', { n: (session.resume_json.projects || []).length }),
+      });
     } catch (e) {
       // A throw here is a BACKEND failure (LLM call errored or returned
       // unparseable JSON), never a "bad user input" — that path returns the
@@ -667,13 +688,27 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
       if (next) {
         session.cert_link_pending = next.name;
         await setSession(phoneHash, session);
-        return `Got it. Verification link for '${next.name}'? 'skip' agar nahi hai.`;
+        return await composeReply({
+          session,
+          prev_state: current,
+          decision: 'ask_link',
+          student_last: trimmed,
+          missing: ['cert_link'],
+          fallback: `Got it. Verification link for '${next.name}'? 'skip' agar nahi hai.`,
+        });
       }
       // All links resolved → enter the "add another or done?" loop.
       session.certs_more_pending = true;
       await setSession(phoneHash, session);
       const n = (session.resume_json.certifications || []).length;
-      return `${n} cert${n > 1 ? 's' : ''} saved ✓ — agla cert bhejo, ya 'done' likho.`;
+      return await composeReply({
+        session,
+        prev_state: current,
+        decision: 'loop_more',
+        student_last: trimmed,
+        missing: [],
+        fallback: `${n} cert${n > 1 ? 's' : ''} saved ✓ — agla cert bhejo, ya 'done' likho.`,
+      });
     }
 
     // (2) "Add another or 'done'?" pending. DONE/SKIP advances; otherwise treat
@@ -724,19 +759,40 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
     if (missingLink) {
       session.cert_link_pending = missingLink.name;
       await setSession(phoneHash, session);
-      return `Got it — '${missingLink.name}'. Verification link bhej dijiye (Coursera / NPTEL / official URL)? 'skip' agar nahi hai.`;
+      return await composeReply({
+        session,
+        prev_state: current,
+        decision: 'ask_link',
+        student_last: trimmed,
+        missing: ['cert_link'],
+        fallback: `Got it — '${missingLink.name}'. Verification link bhej dijiye (Coursera / NPTEL / official URL)? 'skip' agar nahi hai.`,
+      });
     }
 
     if (data.clarification_needed) {
       await setSession(phoneHash, session);
-      return data.clarification_needed;
+      return await composeReply({
+        session,
+        prev_state: current,
+        decision: 'still_missing',
+        student_last: trimmed,
+        missing: ['clarification'],
+        fallback: data.clarification_needed,
+      });
     }
 
     // (6) Every cert in this batch had a URL (or was declined) → "more or done?".
     session.certs_more_pending = true;
     await setSession(phoneHash, session);
     const n = (session.resume_json.certifications || []).length;
-    return `${n} cert${n > 1 ? 's' : ''} saved ✓ — agla cert bhejo, ya 'done' likho.`;
+    return await composeReply({
+      session,
+      prev_state: current,
+      decision: 'loop_more',
+      student_last: trimmed,
+      missing: [],
+      fallback: `${n} cert${n > 1 ? 's' : ''} saved ✓ — agla cert bhejo, ya 'done' likho.`,
+    });
   }
 
   // --- General Phase 2 collection. ---
@@ -754,7 +810,14 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
       SECTION_CONFIG[current].merge(session.resume_json, data);
       if (data.clarification_needed) {
         await setSession(phoneHash, session);
-        return data.clarification_needed;
+        return await composeReply({
+          session,
+          prev_state: current,
+          decision: 'still_missing',
+          student_last: trimmed,
+          missing: ['clarification'],
+          fallback: data.clarification_needed,
+        });
       }
       session.state = NEXT_STATE[current];
       const genReply = await tryGenerate(session, phoneFrom, phoneHash);

@@ -20,14 +20,19 @@ const HARD_CHAR_CAP = 600;
 
 // Pre-built per-field re-ask regexes. If the LLM tries to re-ask a field that
 // is already filled in resume_json, we trip a sanity failure and fall back.
-// Patterns are conservative on purpose — they target the field NAMED as a
-// question, not every mention of the word.
+//
+// CRITICAL — these match ASK FORMS only, not incidental mentions. The reply
+// "I have your email ✓" is an ACKNOWLEDGEMENT and must NOT match the email
+// re-ask check; only forms like "share your email", "your email?", "email kya
+// hai" should fire. Each pattern requires either an ASK VERB before the field
+// name (share/drop/give/send/what's) or an ASK MARKER after it (kya/share/
+// batay/please/bhej/?). Without a marker, "your X" alone is just narration.
 const FIELD_REASK_RE = {
-  name:     /\b(your\s+(full\s+)?name|full\s+name|naam\s+(kya|batay|share)|aapka\s+naam)\b/i,
-  email:    /\b(your\s+email|email\s+(id|address)|email\s+kya|email\s+share|drop\s+your\s+email|share\s+your\s+email)\b/i,
-  linkedin: /\b(your\s+linkedin|linkedin\s+(url|link|profile)|linkedin\s+kya|share\s+your\s+linkedin|linkedin\s+ka\s+link)\b/i,
-  github:   /\b(your\s+github|github\s+(url|link|profile)|github\s+kya|share\s+your\s+github|github\s+ka\s+link)\b/i,
-  cgpa:     /\b(your\s+cgpa|cgpa\s+(kya|share|batay)|percentage\s+(kya|share|batay)|academic\s+score)\b/i,
+  name: /\b(share\s+your\s+(full\s+)?name|drop\s+your\s+(full\s+)?name|what(['']?s|\s+is)\s+your\s+(full\s+)?name|your\s+(full\s+)?name\s+(please|kya|hai|bhej|share)|full\s+name\s+(kya|please|share|batay|bhej|hai)|naam\s+(kya|batay|share|bhej)\b|aapka\s+(full\s+)?naam\s+(kya|share|batay|bhej))\b/i,
+  email: /\b(share\s+your\s+email|drop\s+your\s+email|give\s+(me\s+)?your\s+email|send\s+your\s+email|what(['']?s|\s+is)\s+your\s+email|your\s+email\s+(id|address|please|kya|bhej|share)|email\s+(id|address)\s+(kya|share|please|drop|bhej|hai)|aapka\s+email\s+(kya|share|bhej|hai))\b/i,
+  linkedin: /\b(share\s+your\s+linkedin|drop\s+your\s+linkedin|send\s+your\s+linkedin|your\s+linkedin\s+(url|link|profile|please|kya|bhej|share)|linkedin\s+(url|link|profile)\s+(kya|share|please|drop|bhej)|linkedin\s+ka\s+link|aapka\s+linkedin\s+(kya|share|bhej))\b/i,
+  github: /\b(share\s+your\s+github|drop\s+your\s+github|send\s+your\s+github|your\s+github\s+(url|link|profile|please|kya|bhej|share)|github\s+(url|link|profile)\s+(kya|share|please|drop|bhej)|github\s+ka\s+link|aapka\s+github\s+(kya|share|bhej))\b/i,
+  cgpa: /\b(share\s+your\s+cgpa|what(['']?s|\s+is)\s+your\s+cgpa|your\s+cgpa\s*\?|cgpa\s+(kya|share|batay|please|hai)|percentage\s+(kya|share|batay|please|hai)|academic\s+score\s+(kya|share|please))\b/i,
 };
 
 // Whitelist of multi-digit runs that may legitimately appear in a reply even
