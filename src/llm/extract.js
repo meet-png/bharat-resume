@@ -388,7 +388,18 @@ ROLE-NATIVE METRICS for CASE D — adapt to TARGET ROLE in JD context:
   // event count + participant count + named flagship items / outcomes.
   // Single pending POR entry accumulates across turns (like pending_project).
   AWAITING_POR: {
-    instruction: `Extract a leadership / position-of-responsibility role. Examples of valid roles: "Class Representative", "Club Lead", "MUN Secretary", "Event Organizer", "NSS Coordinator", "Society Head", "Sports Captain".
+    instruction: `Extract a leadership / position-of-responsibility role. Examples of valid roles: "Class Representative", "Club Lead", "MUN Secretary", "Event Organizer", "NSS Coordinator", "Society Head", "Sports Captain", "Core Team Member".
+
+PRE-CHECK BEFORE ASKING ANYTHING — STOP RE-ASKING FOR DETAIL THE STUDENT ALREADY GAVE:
+Before you set clarification_needed, look at resume_json.pending_por. It accumulates across turns.
+  - **If pending_por.role AND pending_por.organization are BOTH already set**, NEVER ask "Kya aapka role aur organization kya tha?" again. The role+org is filled — move on to the next missing piece (bullets / metrics).
+  - **If pending_por.bullets ALREADY contain ≥2 distinct entries** (any combination of action statements + numbers — e.g. "Team handling", "Handle team of 50+ members", "Organised event"), the entry IS sufficient: set clarification_needed = null. The friend-test 2026-06-25 looped on this exact bug — six turns of bullets going into the void while the bot re-asked the same two questions.
+
+TERSE FOLLOW-UPS ARE THE ANSWER, NOT GARBAGE:
+A terse reply like "Team handling", "Organised event", "Handle team of 50+ members", "secured 3 sponsorships", "₹3 lakh budget", "450 delegates" IS the answer to the question you just asked — it's a NEW BULLET for the pending PoR. Extract it into bullets[] EXACTLY ONCE per turn; never return bullets: [] for a short reply because you couldn't form a "full sentence." The rewriter phrases it later.
+
+DEFLECTION HANDLING (Hindi/English):
+If the student replies "upar dediya" / "pehle bola" / "already said" / "mentioned above" / "ek baar bata diya" — DO NOT re-ask. Re-evaluate pending_por per PRE-CHECK above; if role+org and any bullets are present, accept and set clarification_needed = null.
 
 SUFFICIENCY for the PoR entry — ALL THREE must hold:
   (a) role + organization (what role, which club/society/program)
@@ -401,7 +412,7 @@ SUFFICIENCY for the PoR entry — ALL THREE must hold:
 Pending PoR entry lives in resume_json.pending_por (similar to pending_project). Merge new bullets into pending across turns. Once sufficient, router commits to por[] array.
 
 DECISION TREE (one question per turn):
-1. role + organization missing → ask both.
+1. role + organization missing → ask both. ONCE only; if pending_por.role or pending_por.organization is set, skip to step 2.
 2. <1 bullet → ask for concrete action: "Kya specific kaam kiya tha is role mein?"
 3. <2 bullets OR all bullets cover the same angle → ask for the missing angle:
      Missing SCALE: "Kitne events organize kiye / kitne participants the / kitna budget?"
@@ -433,7 +444,16 @@ Follow-up: "secured 8 sponsorships, zero budget deficit"
         if (x.por[k]) p[k] = x.por[k];
       }
       if (Array.isArray(x.por.bullets) && x.por.bullets.length > 0) {
-        p.bullets = (p.bullets || []).concat(x.por.bullets);
+        // Dedupe by normalised text — same fix as projects + experience.
+        // Without this, a terse follow-up that the LLM re-emits as part of a
+        // mixed bullets[] response will double-count the existing line.
+        const norm = (s) => String(s).replace(/\*\*/g, '').trim().toLowerCase();
+        p.bullets = p.bullets || [];
+        const seen = new Set(p.bullets.map(norm));
+        for (const b of x.por.bullets) {
+          const n = norm(b);
+          if (n && !seen.has(n)) { p.bullets.push(b); seen.add(n); }
+        }
       }
     },
   },
