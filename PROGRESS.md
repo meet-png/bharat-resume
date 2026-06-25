@@ -303,6 +303,24 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 
 **What's actually left before launch:** real end-to-end dry run on Railway (Meta → Railway → bot → PDF) with at least one real WhatsApp conversation — the fixes pushed today need a live confirmation that PDF generation now succeeds on a fresh persona. Then 2-3 friendly JECRC students before broadcasting to 100.
 
+### Session — 2026-06-25 (Hybrid LLM-Reply architecture — Phase A scaffolding, flag-off, Claude Opus 4.7)
+
+After the third whack-a-mole loop fix in a week (experience 2026-06-25 morning, then PoR same day), Meet called it: the recurring bug class — LLM extractor returning text that ignores filled fields or drops terse follow-ups — needs a structural fix, not a fourth surgical patch. **He wants the bot to "feel like ChatGPT — predicts, adapts to role, generates pointers automatically, no loops."**
+
+Spec written (`docs/HYBRID-REPLY-SPEC.md`). Core idea: separate "what did the student say" (structured extraction in `extract.js` — unchanged) from "what do we say next" (new `src/llm/respond.js` — role-aware reply generation, state-aware, with structural sanity gates that make re-asking a filled field impossible by construction). Rollback-safe via `HYBRID_REPLY` env flag (default OFF). See spec for the full allow/deny list, the autofill nuance (skilled elicitation vs hallucinated drafts), and the 4-phase rollout plan (A scaffolding → B test-under-flag-on → C pilot ramp → D full default).
+
+**Phase A landed this session (zero behavior change with flag off):**
+- `docs/HYBRID-REPLY-SPEC.md` — 11-section spec.
+- `src/config.js` — `HYBRID_REPLY` env flag, default `false`.
+- `src/llm/respond.js` — new module. System prompt with absolute rules (no fabricated facts, no draft bullets, no Devanagari, no re-ask of filled fields). Sanity gates: length cap (600 chars), Latin-only, multi-digit-fabrication check (every digit-run ≥2 must appear in `student_last` or `resume_json` or the tiny bot-convention whitelist), per-field re-ask regex check. Silent fallback to canned text on ANY failure (LLM error, JSON parse, sanity reject).
+- `src/state/router.js` — `composeReply()` helper. Pure pass-through when flag is off (`return fallback`). When on: calls `respond()`, returns LLM reply on success or `fallback` on failure. Wired into 3 AWAITING_EXPERIENCE return sites only (substitute-impact-ask, clarification-pass-through, multi-entry-saved-loop). Other sites untouched this session — Phase B wires the rest.
+
+**Regression contract state: 11/12 GREEN** with `HYBRID_REPLY=false` (default). Same `test-payment` red (Razorpay test-mode quota — 30/day exhausted, environmental, untouched code path — same contract-override framework as earlier today). Critically: `e2e-happy-path` 16/16, `smoke-router`, and `test-edit-isolation` (59 assertions) all green — confirms the wiring is a true pass-through.
+
+**Phase B (next session — not started):** wire `composeReply()` into the remaining return sites (PoR, projects, certs, single-shot states); add `.runtime/test-respond.js` (isolated unit suite for the sanity gates and fallback path); run smoke-router + e2e with `HYBRID_REPLY=1` in dev; manually re-run the friend-test loop scenarios (experience-impact, PoR-impact) to confirm no loop and warm voice.
+
+**Memory updated:** none yet — Phase A is scaffolding, no behavior change. Memory entries for the new respond-layer voice rules and "skilled elicitation, never hallucinated draft" guidance will land in Phase B once we've validated the LLM output against real student traffic.
+
 ### Session — 2026-06-25 (Friend-test bugs: experience loop, coursework gatekeeping, +4 more, Claude Opus 4.7)
 
 Meet ran the first real friend-test on Railway (`+1 (555) 661-6577` test recipient flow). Friend's chat transcript surfaced **six bugs**, one of them launch-blocking. **Commit `d857605`** fixes all six.

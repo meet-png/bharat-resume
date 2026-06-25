@@ -6,6 +6,7 @@ const { runGeneration, buildPreview } = require('./generator');
 const { deliverPdf } = require('./delivery');
 const { createPaymentLink } = require('../payment/razorpay');
 const { applyEdit } = require('../llm/edit');
+const { respond } = require('../llm/respond');
 const { scoreResume, suggestionsFor } = require('../resume/ats_score');
 const { getSession, setSession, checkRateLimit, acquirePhoneLock, releasePhoneLock, RATELIMIT_MAX } = require('../store/redis');
 const { logEvent } = require('../telemetry/events');
@@ -220,6 +221,50 @@ async function runEdit(session, phoneHash, instruction) {
   session.state = paid ? STATES.PAID_COMPLETE : STATES.DELIVERED;
 
   return { text: pickMessage(paid ? 'editAppliedPaid' : 'editApplied', { remaining }), media: delivery.signedUrl };
+}
+
+// Hybrid LLM-Reply composer. See docs/HYBRID-REPLY-SPEC.md.
+//
+// When config.HYBRID_REPLY is FALSE (default), returns `fallback` verbatim —
+// behavior is identical to the canned-prompts path that has shipped to date.
+// When TRUE, calls src/llm/respond.js, runs sanity gates inside that module,
+// and uses the LLM reply if it passes. Any failure (LLM error, JSON parse,
+// sanity-gate reject, empty result) silently returns `fallback`.
+//
+// `fallback` MUST already be the same string the legacy path would have
+// returned at this point. Non-string fallbacks (e.g. {text, media} for
+// delivery responses) pass through unchanged — this composer is only for
+// collection-state text replies.
+async function composeReply({ session, prev_state, decision, student_last, missing, fallback }) {
+  if (!config.HYBRID_REPLY) return fallback;
+  if (typeof fallback !== 'string') return fallback;
+  if (!session || !student_last) return fallback;
+  try {
+    const result = await respond({
+      state: session.state,
+      prev_state: prev_state || null,
+      resume_json: session.resume_json,
+      student_last,
+      decision: decision || 'still_missing',
+      missing: missing || [],
+      session_flags: {
+        jd_role: session.jd_role,
+        jd_text: session.jd_text ? `(${(session.jd_text || '').length} chars)` : null,
+        jd_generic: !!session.jd_generic,
+        exp_more_pending: !!session.exp_more_pending,
+        certs_more_pending: !!session.certs_more_pending,
+        proj_focus: session.proj_focus || null,
+      },
+      history: [],
+    });
+    if (result && result.used_llm && typeof result.reply === 'string' && result.reply.length > 0) {
+      return result.reply;
+    }
+    return fallback;
+  } catch (e) {
+    logger.warn({ err: e.message, state: session && session.state }, 'composeReply threw — using fallback');
+    return fallback;
+  }
 }
 
 // Public entry. Serializes a single student's messages with a per-phone lock so
@@ -551,14 +596,31 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
 
     // 2. All hard slots present → use the LLM's clarification for bullet/impact depth.
     //    If it re-asks a filled slot, substitute a deterministic impact ask.
+    //    Hybrid: composeReply may swap the canned text for a role-aware,
+    //    no-fabrication LLM ask. Fallback is the canned text — behavior is
+    //    identical when HYBRID_REPLY=false.
     if (data.clarification_needed && bulletCount < EXP_BULLET_CAP) {
       if (EXP_SLOT_REASK_RE.test(data.clarification_needed)) {
         logger.warn({ phoneHash: phoneShort, state: current, clar: data.clarification_needed.slice(0, 60) }, 'LLM re-asked a filled experience slot; substituting impact ask');
         await setSession(phoneHash, session);
-        return pickMessage('expAskImpact');
+        return await composeReply({
+          session,
+          prev_state: current,
+          decision: 'still_missing',
+          student_last: trimmed,
+          missing: ['impact'],
+          fallback: pickMessage('expAskImpact'),
+        });
       }
       await setSession(phoneHash, session);
-      return data.clarification_needed;
+      return await composeReply({
+        session,
+        prev_state: current,
+        decision: 'still_missing',
+        student_last: trimmed,
+        missing: ['clarification'],
+        fallback: data.clarification_needed,
+      });
     }
 
     // 3. Sufficient → enter the "add another or done?" loop instead of advancing.
@@ -566,7 +628,15 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
     session.exp_focus = null;
     await setSession(phoneHash, session);
     const n = expList.length;
-    return `Internship/job #${n} saved ✓ — agla internship ya job bhejo (ek message mein), ya 'done' likho.`;
+    const loopFallback = `Internship/job #${n} saved ✓ — agla internship ya job bhejo (ek message mein), ya 'done' likho.`;
+    return await composeReply({
+      session,
+      prev_state: current,
+      decision: 'loop_more',
+      student_last: trimmed,
+      missing: [],
+      fallback: loopFallback,
+    });
   }
 
   // --- AWAITING_CERTS: multi-item with per-cert link follow-up + "more or done?" loop. ---

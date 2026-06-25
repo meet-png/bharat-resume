@@ -51,6 +51,15 @@ const schema = z.object({
   // quality, not conversion. Off by default — the paid flow is untouched.
   PILOT_MODE: z.preprocess((v) => v === 'true' || v === true, z.boolean().default(false)),
 
+  // Hybrid LLM-Reply mode. See docs/HYBRID-REPLY-SPEC.md. When ON, router calls
+  // src/llm/respond.js for outbound text (state-aware, role-aware, no re-ask of
+  // filled fields by construction). When OFF (default), behavior is identical
+  // to the canned-prompts path that has shipped to date. Rollback is a single
+  // env flip; no redeploy needed. Sanity gates inside respond.js will fall
+  // back to the canned text on any failure, so a bad LLM response NEVER
+  // surfaces to the student.
+  HYBRID_REPLY: z.preprocess((v) => v === 'true' || v === true, z.boolean().default(false)),
+
   // Secret pepper for phone-number hashing (src/security/hash.js). Without it a
   // leaked sha256(phone) is brute-forceable back to the number. Set a long
   // random value in production. Optional so dev still boots; a missing value in
