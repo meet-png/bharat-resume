@@ -225,18 +225,25 @@ async function runEdit(session, phoneHash, instruction) {
 
 // Hybrid LLM-Reply composer. See docs/HYBRID-REPLY-SPEC.md.
 //
-// When config.HYBRID_REPLY is FALSE (default), returns `fallback` verbatim —
-// behavior is identical to the canned-prompts path that has shipped to date.
-// When TRUE, calls src/llm/respond.js, runs sanity gates inside that module,
-// and uses the LLM reply if it passes. Any failure (LLM error, JSON parse,
-// sanity-gate reject, empty result) silently returns `fallback`.
+// Hybrid activates if EITHER:
+//   - config.HYBRID_REPLY is true (global on — all sessions), OR
+//   - config.HYBRID_REPLY_FOR_PILOT is true AND session.pilot is true
+//     (pilot-only opt-in — paid sessions stay canned).
+// Otherwise returns `fallback` verbatim — behavior identical to the
+// canned-prompts path that has shipped to date.
+//
+// On activation, calls src/llm/respond.js, runs sanity gates inside that
+// module, and uses the LLM reply if it passes. Any failure (LLM error, JSON
+// parse, sanity-gate reject, empty result) silently returns `fallback`.
 //
 // `fallback` MUST already be the same string the legacy path would have
 // returned at this point. Non-string fallbacks (e.g. {text, media} for
 // delivery responses) pass through unchanged — this composer is only for
 // collection-state text replies.
 async function composeReply({ session, prev_state, decision, student_last, missing, fallback }) {
-  if (!config.HYBRID_REPLY) return fallback;
+  const sessionPilot = !!(session && session.pilot);
+  const useHybrid = config.HYBRID_REPLY || (config.HYBRID_REPLY_FOR_PILOT && sessionPilot);
+  if (!useHybrid) return fallback;
   if (typeof fallback !== 'string') return fallback;
   if (!session || !student_last) return fallback;
   try {

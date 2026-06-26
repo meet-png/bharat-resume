@@ -60,6 +60,13 @@ const schema = z.object({
   // surfaces to the student.
   HYBRID_REPLY: z.preprocess((v) => v === 'true' || v === true, z.boolean().default(false)),
 
+  // Pilot-only opt-in for Hybrid LLM-Reply. When TRUE, sessions where
+  // session.pilot === true (i.e. PILOT_MODE was on at session start) get the
+  // hybrid voice EVEN IF the global HYBRID_REPLY is off. This is the safe
+  // rollout vector: pilot students get the new voice; paid production sessions
+  // stay on canned text until pilot validates. Kill-switch is one env flip.
+  HYBRID_REPLY_FOR_PILOT: z.preprocess((v) => v === 'true' || v === true, z.boolean().default(false)),
+
   // Secret pepper for phone-number hashing (src/security/hash.js). Without it a
   // leaked sha256(phone) is brute-forceable back to the number. Set a long
   // random value in production. Optional so dev still boots; a missing value in
