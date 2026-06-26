@@ -23,6 +23,15 @@ function unlocked(session) {
 
 const SKIP_RE = /^\s*(skip|no|nahi|nahin|nope|none|nothing|na|n\/a|kuch nahi|no thanks)\s*$/i;
 const DONE_RE = /^\s*(done|finish|finished|bas|over|complete)\s*$/i;
+// Broader "I have no more entries to add" — used in multi-entry "more or done?"
+// loops (experience, projects, certs). Matches natural-language declines like
+// "I don't have any", "no more", "nothing else", "that's all". Live-test
+// 2026-06-26: friend typed "I don't have any" after one MUN experience and
+// the bot pushed an empty {} onto experience[] then asked hard-slot questions
+// forever because SKIP_RE/DONE_RE need an exact word match. NO_MORE_HINT is
+// permissive on PURPOSE — applied only in the "more?" context, where any
+// decline form should advance, never loop.
+const NO_MORE_HINT = /\b(i don'?t have any|don'?t have any|i don'?t have|no more|nothing else|nothing more|that'?s all|that is all|nahi koi|koi nahi|nahi hai|nahi bhai|aur nahi|kuch nahi)\b/i;
 // Student explicitly declining to share a cert verification link.
 const NOLINK_RE = /\b(no link|skip link|nolink|no url|without link|no verification|link nahi|nahi link|link nahin|private)\b/i;
 // A URL or bare domain (with path) anywhere in the message — used to pull a
@@ -434,7 +443,7 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
   // --- AWAITING_POR: pending_por accumulator (similar to projects). ---
   // Multi-bullet, multi-angle sufficiency check; commits pending to por[] when sufficient.
   if (current === STATES.AWAITING_POR) {
-    if (SKIP_RE.test(trimmed)) {
+    if (SKIP_RE.test(trimmed) || NO_MORE_HINT.test(trimmed)) {
       const pending = session.resume_json.pending_por;
       if (pending && (pending.role || pending.organization) && (pending.bullets || []).length > 0) {
         session.resume_json.por = (session.resume_json.por || []).concat([pending]);
@@ -500,7 +509,7 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
   }
 
   if (current === STATES.AWAITING_PROJECTS) {
-    if (DONE_RE.test(trimmed) || SKIP_RE.test(trimmed)) {
+    if (DONE_RE.test(trimmed) || SKIP_RE.test(trimmed) || NO_MORE_HINT.test(trimmed)) {
       const pending = session.resume_json.pending_project;
       if (pending && Object.keys(pending).length > 0) {
         commitProject(session.resume_json, pending);
@@ -572,11 +581,17 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
   // were getting dropped — fixed in extract.js PRE-CHECK + TERSE-METRIC rules),
   // (2) the flow never asked "add another internship/job?" so students with
   // multiple jobs only got one rendered. Mirror the projects + certs pattern.
+  // Tracks whether the current turn just pushed an empty {} onto experience[]
+  // via the exp_more_pending fall-through. If extraction then produces nothing,
+  // we treat the message as a decline (pop the empty entry, advance) rather
+  // than loop on hard-slot asks.
+  let justPushedEmptyExp = false;
   if (current === STATES.AWAITING_EXPERIENCE) {
-    // (a) "Add another experience or done?" pending — DONE/SKIP advances;
-    //     otherwise treat this message as the start of a NEW experience entry.
+    // (a) "Add another experience or done?" pending — DONE / SKIP / natural-
+    //     language decline ("I don't have any", "no more") advances; otherwise
+    //     treat this message as the start of a NEW experience entry.
     if (session.exp_more_pending) {
-      if (DONE_RE.test(trimmed) || SKIP_RE.test(trimmed)) {
+      if (DONE_RE.test(trimmed) || SKIP_RE.test(trimmed) || NO_MORE_HINT.test(trimmed)) {
         session.exp_more_pending = false;
         session.exp_focus = null;
         session.state = NEXT_STATE[current];
@@ -588,6 +603,7 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
       session.exp_focus = null;
       if (!Array.isArray(session.resume_json.experience)) session.resume_json.experience = [];
       session.resume_json.experience.push({});
+      justPushedEmptyExp = true;
       // fall through to extraction; the merger targets the last (new) entry.
     }
 
@@ -611,6 +627,20 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
     const exp = expList.length ? expList[expList.length - 1] : null;
     const bulletCount = (exp && exp.bullets || []).length;
     logger.info({ phoneHash: phoneShort, state: current, usage, expEntries: expList.length, bullets: bulletCount }, 'extracted');
+
+    // Safety: if we just pushed an empty {} via exp_more_pending fall-through
+    // AND extraction produced no fields on that new entry, the student likely
+    // meant 'done' but used a natural-language form NO_MORE_HINT didn't catch
+    // (e.g. "umm I'm out", "kuch khaas nahi"). Pop the empty entry and advance
+    // instead of locking into a hard-slot loop on a phantom entry.
+    if (justPushedEmptyExp && exp && Object.keys(exp).length === 0) {
+      logger.info({ phoneHash: phoneShort, state: current }, 'empty experience entry after decline — popping and advancing');
+      expList.pop();
+      session.state = NEXT_STATE[current];
+      const genReplyAdv = await tryGenerate(session, phoneFrom, phoneHash);
+      await setSession(phoneHash, session);
+      return genReplyAdv || pickPrompt(session.state, session);
+    }
 
     const missing = experienceHardMissing(exp);
 
@@ -718,10 +748,11 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
       });
     }
 
-    // (2) "Add another or 'done'?" pending. DONE/SKIP advances; otherwise treat
-    //     this message as additional cert(s) and fall through to extraction.
+    // (2) "Add another or 'done'?" pending. DONE / SKIP / natural-language
+    //     decline advances; otherwise treat this message as additional cert(s)
+    //     and fall through to extraction.
     if (session.certs_more_pending) {
-      if (DONE_RE.test(trimmed) || SKIP_RE.test(trimmed)) {
+      if (DONE_RE.test(trimmed) || SKIP_RE.test(trimmed) || NO_MORE_HINT.test(trimmed)) {
         session.certs_more_pending = false;
         session.state = NEXT_STATE[current];
         const genReply = await tryGenerate(session, phoneFrom, phoneHash);
@@ -732,8 +763,8 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
       // fall through to extraction below
     }
 
-    // (3) First-entry skip: no certs at all.
-    if (SKIP_RE.test(trimmed)) {
+    // (3) First-entry skip / decline: no certs at all.
+    if (SKIP_RE.test(trimmed) || NO_MORE_HINT.test(trimmed)) {
       session.state = NEXT_STATE[current];
       const genReply = await tryGenerate(session, phoneFrom, phoneHash);
       await setSession(phoneHash, session);
@@ -802,10 +833,81 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
     });
   }
 
+  // --- AWAITING_ACHIEVEMENTS: multi-entry with "more or done?" loop. ---
+  // Mirror experience/certs/projects: per-message save → achievements_more_pending
+  // → "saved ✓ — agla bhejo, ya 'done' likho." → next done/skip/decline advances.
+  // Pattern added 2026-06-26 after live-test showed single-shot achievements
+  // forced students to cram everything into one message.
+  if (current === STATES.AWAITING_ACHIEVEMENTS) {
+    // (1) "Add another or 'done'?" pending — done/skip/decline advances.
+    if (session.achievements_more_pending) {
+      if (DONE_RE.test(trimmed) || SKIP_RE.test(trimmed) || NO_MORE_HINT.test(trimmed)) {
+        session.achievements_more_pending = false;
+        session.state = NEXT_STATE[current];
+        const genReply = await tryGenerate(session, phoneFrom, phoneHash);
+        await setSession(phoneHash, session);
+        return genReply || pickPrompt(session.state, session);
+      }
+      session.achievements_more_pending = false;
+      // fall through to extraction below
+    }
+
+    // (2) First-entry skip / decline: no achievements at all.
+    if (SKIP_RE.test(trimmed) || NO_MORE_HINT.test(trimmed)) {
+      session.state = NEXT_STATE[current];
+      const genReply = await tryGenerate(session, phoneFrom, phoneHash);
+      await setSession(phoneHash, session);
+      return genReply || pickPrompt(session.state, session);
+    }
+
+    // (3) Extract achievement(s) from this message. The extractor's merge does
+    //     a concat() on rj.achievements, so multi-turn accumulation is native.
+    let dataA, usageA;
+    try {
+      ({ data: dataA, usage: usageA } = await extractSection({ state: current, body: trimmed, resumeJson: session.resume_json, session }));
+    } catch (e) {
+      logger.error({ err: e.message, status: e.status, code: e.code, state: current, bodyLen: trimmed.length }, 'extract failed');
+      return pickMessage('serverError');
+    }
+    logger.info({
+      phoneHash: phoneShort, state: current, usage: usageA,
+      newAchievements: Array.isArray(dataA && dataA.achievements) ? dataA.achievements.length : 0,
+    }, 'extracted');
+    SECTION_CONFIG[current].merge(session.resume_json, dataA);
+
+    if (dataA.clarification_needed) {
+      await setSession(phoneHash, session);
+      return await composeReply({
+        session,
+        prev_state: current,
+        decision: 'still_missing',
+        student_last: trimmed,
+        missing: ['clarification'],
+        fallback: dataA.clarification_needed,
+      });
+    }
+
+    // (4) Saved → "more or done?" loop.
+    session.achievements_more_pending = true;
+    await setSession(phoneHash, session);
+    const nA = (session.resume_json.achievements || []).length;
+    return await composeReply({
+      session,
+      prev_state: current,
+      decision: 'loop_more',
+      student_last: trimmed,
+      missing: [],
+      fallback: `${nA} achievement${nA > 1 ? 's' : ''} saved ✓ — agla bhejo, ya 'done' likho.`,
+    });
+  }
+
   // --- General Phase 2 collection. ---
   if (PHASE_2_STATES.has(current)) {
     const optional = OPTIONAL_STATES.has(current);
-    if (SKIP_RE.test(trimmed) && optional) {
+    // SKIP / natural-language decline advances optional sections. This is what
+    // catches AWAITING_COURSEWORK "nothing else", etc. — without it, the
+    // extractor returns empty and the section loops on its clarification.
+    if (optional && (SKIP_RE.test(trimmed) || NO_MORE_HINT.test(trimmed))) {
       session.state = NEXT_STATE[current];
       const genReply = await tryGenerate(session, phoneFrom, phoneHash);
       await setSession(phoneHash, session);

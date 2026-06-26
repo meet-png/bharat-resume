@@ -167,10 +167,10 @@ const PROMPTS = {
   ],
 
   [STATES.AWAITING_ACHIEVEMENTS]: [
-    "Last one — koi achievements, ranks, prizes? List kar dijiye. 'skip' / 'no' if nothing comes to mind.",
-    "Final section: any achievements, awards, or prizes? Or 'skip' / 'no'.",
-    "Awards/ranks/prizes? Sab batayiye, ek saath. 'skip' or 'no' if none.",
-    "Last question: notable achievements, competitions, awards? Or 'skip' / 'no' to wrap up.",
+    "Last one — koi achievements, ranks, prizes? Ek-ek karke bhejiye. 'done' jab sab ho jaye, 'skip' if none.",
+    "Final section: any achievements, awards, or prizes? Share one at a time. Type 'done' when finished, 'skip' if nothing.",
+    "Awards/ranks/prizes? Ek-ek alag message mein. 'done' to finish, 'skip' if no achievements.",
+    "Notable achievements, competitions, or awards? Share one per message, 'done' when complete, 'skip' if none.",
   ],
 };
 
