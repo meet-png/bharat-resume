@@ -164,11 +164,12 @@ function buildPreview(session) {
   if (r.name) lines.push(`_For: ${r.name}_`);
   lines.push('');
 
-  // ATS score — primary "is it any good?" signal.
-  if (typeof session.ats_score === 'number') {
-    const target = session.jd_role || session.jd_role_title || 'this role';
-    lines.push(`*ATS Score:* ${session.ats_score}/100 for ${target}`);
-  }
+  // ATS score itself is NOT shown to the student (Meet's call 2026-06-26 —
+  // students fixate on the number instead of using their edits to improve the
+  // content). The score still lives on session.ats_score for bot awareness
+  // (admin dashboard, telemetry, rewriter calibration) — just not surfaced
+  // here. The improvement suggestions ARE shown so students know what to do
+  // with their edit budget.
 
   // Matched-skill COUNT (not full list). 3-token tease is enough signal
   // without giving a usable skill section. ONLY shown when a REAL JD exists —
@@ -183,11 +184,13 @@ function buildPreview(session) {
     lines.push(`*JD match:* ${matched.length}/${jdN} keywords (${tease})`);
   }
 
-  // Sub-60 hints — generic improvement nudges, no content reveal.
-  if (typeof session.ats_score === 'number' && session.ats_score < 60 &&
-      Array.isArray(session.ats_suggestions) && session.ats_suggestions.length > 0) {
+  // Improvement suggestions — always shown when the scorer surfaces any.
+  // Drives use of the 3 free edits. No <60 gate any more (the score itself
+  // is hidden, so gating on it would silently turn the help off and on for
+  // identical-looking students).
+  if (Array.isArray(session.ats_suggestions) && session.ats_suggestions.length > 0) {
     lines.push('');
-    lines.push(`_To improve:_`);
+    lines.push(`_To improve with your edits:_`);
     for (const s of session.ats_suggestions) lines.push(`  • ${s}`);
   }
 
