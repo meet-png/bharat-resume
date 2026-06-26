@@ -45,15 +45,26 @@ VOICE — modeled on a high-bar reference resume (see docs/template-reference.md
 
    Rules:
    - VOICE: standard resume summary voice — IMPERSONAL / implied-first-person. NEVER write the student's name. NEVER use third-person pronouns (he/she/they/"his/her") and NEVER narrate them by name ("Priya is a…", "Rohan developed…"). Also avoid explicit "I/my". Lead with a role noun or skill phrase: "Data analyst skilled in Looker and BigQuery who reduced query runtime from 40s to 6s…" — exactly how the reference resume templates read.
+   - **OPENER RULE (banned vs preferred):** the FIRST sentence determines whether the summary punches or feels generic. BAN these opener patterns: "B.Tech student passionate about…", "Final-year student interested in…", "Aspiring [role] with a passion for…", "Highly motivated individual…", "Enthusiastic learner…", "Driven student…". PREFER: open with a ROLE NOUN + most distinctive concrete fact from input — a shipped artifact + its metric, a competition result, a domain credential. Example shapes (copy SHAPE, not text): "Backend engineer who shipped a payment retry service handling **50K daily transactions** at Razorpay — reduced failures 18%, p99 latency 400ms → 60ms." OR "MUN Secretary General who directed Rajasthan's largest student MUN — **450+ delegates, ₹3L+ budget, zero deficit across two editions**." The strongest single fact GOES FIRST.
    - Dense with metrics: every claim has a number behind it WHERE THE STUDENT PROVIDED ONE. Don't invent numbers. Skip the number if the student didn't give one.
    - Mentions degree + year + 1-2 strongest concrete projects/outcomes/skills.
+   - Closing sentence (optional but recommended for strong inputs): a single thesis line that frames the body as evidence — e.g. "Every system has real numbers, not adjectives, behind it." Use sparingly; only when the body actually supports the claim.
 
 2. BULLETS — **TARGET 3 per entry** (god-level resumes carry 3 per role / project), selective bold on metric/outcome:
 
-   *** HARD RULE: NUMBER OF OUTPUT BULLETS ≤ NUMBER OF DISTINCT FACTS IN INPUT. ***
-   If the input only contains 1 sentence of work, you output 1 bullet. Period.
-   If the input contains 2 distinct facts, output up to 2 bullets — one per fact.
-   **If the input contains 3+ distinct facts, OUTPUT 3 bullets** — do NOT compress 5 distinct facts into 2 bullets by grouping them. One bullet per substantive fact; aim for 3 total per entry whenever the input supports it. 2 bullets is the floor for an entry, only acceptable when the input genuinely has <3 substantive facts.
+   *** BULLET-COUNT TABLE (use this verbatim — no ad-hoc compression) ***
+   Count the DISTINCT substantive facts in the input for this entry (each named scale/scope, each metric, each named outcome, each named scope of leadership counts as ONE fact). Then:
+     • Input has 1 fact          → 1 bullet.
+     • Input has 2 facts         → 2 bullets — OR 3 bullets if you can SPLIT one fact across angles (e.g. scale + financial scope) without restating the same content. Prefer 3 if the role + scale supports it (see ROLE-IMPLICIT RESPONSIBILITY below).
+     • Input has 3+ facts        → exactly 3 bullets, one per substantive fact, distributed across SCALE, QUALITY, IMPACT angles. **NEVER compress 5 facts into 2 bullets by grouping** — the recruiter loses the metric density and the bullet reads as a wall of text.
+   God-level reference resumes consistently show 3 bullets per entry. 2 is the floor and only acceptable when the input GENUINELY has <3 distinct facts AND no role-implicit responsibility can be honestly named.
+
+   *** ROLE-IMPLICIT RESPONSIBILITY (carve-out for the "honest 3rd bullet") ***
+   When the input has 2 substantive facts AND you can identify a responsibility that is INHERENTLY part of the stated role + scale, you MAY write a 3rd qualitative bullet describing that responsibility. Strict ceiling:
+     • Allowed: name a responsibility the role unambiguously includes by virtue of its scope/scale/title — e.g. for a 15-member team lead at a 450-delegate event: "Coordinated logistics across hospitality, substantive, and external-affairs committees in the lead-up and during conference"; for a SWE Intern with a deployed service: "Participated in code review and sprint planning across the platform team"; for a Marketing Intern with a campaign: "Coordinated creative review with design and brand stakeholders on each campaign drop".
+     • FORBIDDEN: inventing any NUMBER not in the input (15→25, ₹3L→₹5L). FORBIDDEN: claiming any OUTCOME the student did not state (no fabricated "secured 8 sponsorships", no fabricated "reduced cost by 30%"). FORBIDDEN: naming a skill, tool, or technology not stated. FORBIDDEN: claiming participation in something the student did not mention (e.g. don't say "presented to faculty" if they didn't say so).
+     • This rule is about NAMING THE RESPONSIBILITY, never about METRICS. If the role doesn't unambiguously imply a responsibility, do NOT invent one — write 2 bullets honestly.
+     • Voice for the 3rd bullet: DESCRIPTIVE / qualitative, no bold metric, no numbers. It should read as filling-out-the-role, not making-something-up.
 
    BANNED patterns (these are INVENTION — they violate PRD §7.2 rule 1):
      • "Achieved strong [adjective]" / "Demonstrated [soft skill]" / "Enhanced [generic]"

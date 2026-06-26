@@ -307,10 +307,11 @@ CASE F — link sorted, metric covered (≥2 angles), but ONLY 2 bullets:
 
 ENRICHMENT OVERRIDE (applies when GitHub repo data was fetched for this project):
 The repo is CONTEXT to help you understand and DESCRIBE the project — it is NOT a substitute for the metric bar. Hold projects to the SAME standard as experience: a metric-free project is NOT done.
-  - **Mine the README HARD**: from description + README + topics + languages, author 2 SUBSTANTIVE descriptive bullets covering different angles — not one summary line:
-      (i)  WHAT it does + core features the README names (the one-line description of purpose + the specific features section / module list).
-      (ii) HOW it does it: architecture, key tech choices, integration / data-flow / scaling approach mentioned in the README.
-    Plus pull any REAL numbers the README itself contains (stars, downloads, users, benchmarks, latency, accuracy, coverage) into a metric bullet, bolded with **…**. That's already 2-3 substantive bullets BEFORE the student says anything more.
+  - **Mine the README HARD — TARGET 3 distinct descriptive bullets** covering different angles. Do NOT settle for 2 when the README supports a 3rd. Author each bullet from a different concrete part of the README:
+      (i)   WHAT it does — the one-line description of purpose plus the specific features section / module list / core feature list from the README. Anchor the project identity.
+      (ii)  HOW it does it — architecture, key tech choices, integration / data-flow / scaling approach mentioned in the README. Be specific (e.g. "five-table star schema, weekly ETL refresh", not "well-structured data pipeline").
+      (iii) ONE KEY ARCHITECTURAL DECISION OR FLAGSHIP FEATURE — a specific design move the README documents (e.g. "swappable storage layer", "JSON-schema contract for LLM calls", "FR-2 validation gate"). If the README is long enough to describe HOW it does it, it almost always contains a 3rd named decision or feature worth its own bullet.
+    Plus pull any REAL numbers the README itself contains (stars, downloads, users, benchmarks, latency, accuracy, coverage, test counts) into a metric bullet, bolded with **…**. With a metric, that's 3-4 bullets BEFORE the student says anything more — and you should cap at 3 descriptive + 1 metric in the extraction (the rewriter will distill).
   - Repo-derived descriptive bullets DO NOT by themselves satisfy the project. Requirement (c) STILL stands: ≥2 angles minimum. A project described as "a habit tracker with a leaderboard" with no numbers is NOT sufficient.
   - If the README gave no hard metric, you MUST still ask the student ONCE (CASE D) for a quantifiable outcome native to this project — e.g. "DevHab kitne log use karte hain — daily active users ya signups? Koi performance number, GitHub stars, ya competition result?". Set clarification_needed to that question.
   - ONLY after that one ask: if the student gives a number, add it as a NEW bullet → sufficient. If the student clearly has none ("kuch nahi", "pata nahi", "no numbers", "skip", "none", "abhi koi nahi"), THEN accept the descriptive bullets and set clarification_needed = null. Never push for a metric more than that single time.
@@ -599,7 +600,7 @@ ${JSON.stringify({
         topics: repoEnrichment.topics,
         stars: repoEnrichment.stars,
         url: repoEnrichment.html_url,
-        readme_excerpt: repoEnrichment.readme ? repoEnrichment.readme.slice(0, 1500) : null,
+        readme_excerpt: repoEnrichment.readme ? repoEnrichment.readme.slice(0, 2500) : null,
       })}\n`
     : '';
 
