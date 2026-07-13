@@ -309,6 +309,15 @@ function buildPreview(session) {
   lines.push('');
   lines.push(`⚠️ _Zaroor: PDF khol ke poora resume review kar lo bhejne se pehle — koi fact / metric / date galat lage to "edit" bolke fix karo._`);
 
+  // Post-PDF rating micro-survey (2026-07-14). Only shown when the student
+  // hasn't rated yet — after they rate, we don't re-prompt so the preview
+  // doesn't feel naggy on subsequent messages. Rating is captured by the
+  // DELIVERED / PAID_COMPLETE handler's RATE_RE match (a bare digit 1-5).
+  if (!session.rating) {
+    lines.push('');
+    lines.push(`⭐ _Reply 1-5 to rate this resume — 30 seconds, helps us improve fast._`);
+  }
+
   let out = lines.join('\n');
   // Hard cap generous enough to fit ATS suggestions + interview topics +
   // payment CTAs + double-check caution comfortably. WhatsApp text limit is

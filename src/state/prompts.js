@@ -5,20 +5,24 @@
 const { STATES } = require('./states');
 
 const PROMPTS = {
+  // NEW: warm first-touch welcome (2026-07-14 revamp). Students often arrive
+  // here after replying YES to a Marketing template; make the follow-up feel
+  // like a welcome, not another confirmation gate. Sets expectations up front:
+  // ~10 min, what they'll get out, plus lightweight command hints.
   [STATES.NEW]: [
-    "Hey! I'm Saathi from BHARAT RESUME. Aapka professional resume ~10 min mein bana denge — chat in Hinglish or English, jo comfortable ho.\n\n_Commands:_ 'reset' = start over · 'skip' = skip an optional question · 'done' = finish a multi-item section (projects/certs/jobs).\n\nReady? Reply 'yes' / 'haan' to start.",
-    "Namaste! Saathi here — BHARAT RESUME ka AI bot. ~10 min mein resume tayar.\n\n_Useful at any time:_ 'reset' starts fresh · 'skip' skips an optional question · 'done' wraps up a section with multiple entries.\n\nShall we begin? Type 'yes' / 'haan'.",
-    "Hi! Main Saathi hu — I'll build your professional resume in about 10 minutes. Hinglish/English chalega.\n\n_Quick commands:_ 'reset' = fresh start · 'skip' = skip optional · 'done' = finish multi-entry sections.\n\nShuru karein? Reply 'yes' / 'ready'.",
-    "Hello! Saathi from BHARAT RESUME — 10 min mein professional resume ready. Chat in whatever you prefer.\n\n_Anytime commands:_ 'reset' restarts · 'skip' jumps optional questions · 'done' closes a multi-entry section.\n\nType 'haan' / 'yes' to begin.",
+    "Namaste 🙏 I'm Saathi from BHARAT RESUME.\n\nHere's the deal — 10 minutes of chat, and you'll get an ATS-tuned, JD-tailored PDF resume delivered right here. Chat in Hinglish, English, or a mix — jo comfortable ho.\n\n_Handy anytime:_ 'reset' start over · 'skip' skip an optional question · 'done' finish a multi-entry section.\n\nReady? Reply 'yes' / 'haan' and we begin.",
+    "Hi 👋 Saathi here from BHARAT RESUME.\n\nAap 10 min chat karo, aur ek professional, ATS-friendly PDF resume yahin milega — target job ke hisab se tailored. Hinglish, English, ya mix — koi bhi.\n\n_Anytime commands:_ 'reset' = start over · 'skip' = skip optional · 'done' = wrap a section with multiple entries.\n\nShuru karein? Reply 'yes' / 'haan'.",
+    "Hey! Main Saathi hu — BHARAT RESUME ka AI resume builder.\n\n10 min mein aapko ek ATS-tuned PDF resume milega, JD ke hisab se banaya hua. Naturally chat karo — Hinglish, English, jo chahe.\n\n_Useful anytime:_ 'reset' fresh start · 'skip' skip optional question · 'done' finish multi-entry section.\n\nStart karein? Type 'yes' / 'haan' / 'ready'.",
+    "Hello 👋 Saathi from BHARAT RESUME.\n\n~10 min. Ek ATS-readable, JD-tailored PDF resume. Delivered in this chat. Type in Hinglish or English, whichever you think in.\n\n_Anytime you can:_ 'reset' to restart · 'skip' to skip an optional question · 'done' to close a multi-entry section.\n\nReply 'haan' / 'yes' whenever you're ready.",
   ],
 
-  // Warmer fallbacks for when the user sends something other than yes/haan/ready.
-  // Acknowledges the contact + sets expectation + ends with a clear CTA.
+  // AWAITING_CONFIRM_START: student sent something OTHER than yes/haan first.
+  // Acknowledge softly, don't scold. Encourage a one-word ready-to-go signal.
   [STATES.AWAITING_CONFIRM_START]: [
-    "Hi! Saathi here — chaliye aapka resume banate hain. Reply 'yes' or 'haan' to start. (Anytime: 'reset' = start over, 'skip' = skip an optional question.)",
-    "Hey! Bas 'yes' likh dijiye aur ~10 min mein resume ready. ('reset' anytime to start fresh.) Chalein?",
-    "Namaste! Resume banate hain saath mein. Type 'yes' / 'haan' / 'ready' to begin. ('skip' kabhi bhi optional skip karne ke liye, 'reset' fresh start.)",
-    "Saathi ready hai ✓ Reply 'yes' / 'haan' to kick off. Tip — 'reset' starts over, 'skip' jumps an optional question.",
+    "Chaliye shuru karte hain! Reply 'yes' / 'haan' whenever you're ready — ~10 min mein resume tayar. ('reset' anytime to restart, 'skip' for optional questions.)",
+    "Ready to build your resume? Bas 'yes' likh dijiye — takes ~10 min. ('reset' whenever you want a fresh start.)",
+    "Chalein saath mein resume banate hain — reply 'yes' or 'haan' to begin. ('skip' anytime for optional questions, 'reset' for a fresh start.)",
+    "Saathi ready hai ✓ Reply 'yes' / 'haan' / 'ready' to start. Tips — 'reset' restarts, 'skip' jumps optional questions.",
   ],
 
   [STATES.AWAITING_NAME]: [
@@ -254,6 +258,25 @@ const MESSAGES = {
     "No payment needed 🎉 Aapko clean ATS-readable PDF already mil chuka hai — bilkul free. Type 'edit' to refine it.",
     "It's on us ✓ Aapka clean resume already unlocked hai — koi ₹49 nahi. 'edit' to make changes.",
     "Free pilot ✨ Clean PDF already deliver ho chuka — nothing to pay. 'edit' for any tweaks.",
+  ],
+
+  // Rating micro-survey replies (added 2026-07-14). Three tiers so the ack
+  // feels tailored: low ratings acknowledge and offer to fix, mid ratings
+  // thank + nudge to refine, high ratings thank + encourage sharing.
+  ratingThanksLow: [
+    "Thanks for the honest {r}/5 — hume sudhar karna hai. Type 'edit' aur exactly kya galat lag raha hai batao, main fix karta hu. Or reply 'reset' if you'd rather start fresh.",
+    "Got it — {r}/5. Bura laga sun ke. 'edit' likh ke bata dijiye kya change karna hai, or 'reset' for a fresh attempt.",
+    "{r}/5 — thanks for being real. Kya specifically ache nahi laga? 'edit' bolke batayiye, we'll fix.",
+  ],
+  ratingThanksMid: [
+    "Thanks for the {r}/5 ⭐ Kuch specific improve karna hai? 'edit' likh ke bata dijiye.",
+    "{r}/5 noted — thanks! Reply 'edit' if you want to polish anything specific.",
+    "Got the {r}/5 ⭐ Any specific section aap tweak karna chahenge? Type 'edit'.",
+  ],
+  ratingThanksHigh: [
+    "Thanks for the {r}/5 ⭐ Really glad it landed! Ab is PDF ko recruiters ko bhej dijiye. Reply 'edit' anytime for tweaks.",
+    "{r}/5 ⭐ Thank you! Send this PDF to recruiters — it's ready. 'edit' anytime for changes.",
+    "Awesome — {r}/5 ⭐ Thanks! Time to share this with hiring managers. Reply 'edit' any time for small tweaks.",
   ],
 
   // Sent when the student types 'pay' — carries the Razorpay short URL.

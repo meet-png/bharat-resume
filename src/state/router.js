@@ -45,6 +45,11 @@ const SHOW_RE = /^\s*show\s*me\s*$/i;
 const RESET_RE = /^\s*reset\s*$/i;
 const PAY_RE = /^\s*(pay|pay now|unlock|buy|purchase|₹?\s*49|haan pay)\s*$/i;
 const EDIT_RE = /^\s*(edit|edits|change|changes)\s*$/i;
+// Post-PDF rating micro-survey (added 2026-07-14). Matches "5", "4/5",
+// "5 stars", "rating 3" etc. Only fires in DELIVERED / PAID_COMPLETE state
+// AFTER a PDF has been delivered, so a bare digit earlier in the flow
+// (e.g. someone typing "5" as their CGPA) never trips this.
+const RATE_RE = /^\s*(?:rating\s*|rate\s*)?([1-5])\s*(?:\/\s*5|stars?)?\s*$/i;
 // Edit budget: 3 free (watermarked) edits before the pay nudge, then 3 more
 // post-payment (clean PDF). Communicated to the student at every boundary.
 const MAX_FREE_EDITS = 3;
@@ -174,6 +179,26 @@ function rescore(session) {
   session.ats_score = scored.total;
   session.ats_breakdown = scored;
   session.ats_suggestions = suggestionsFor(scored);
+}
+
+// Post-PDF rating micro-survey (added 2026-07-14). Stores the rating on the
+// session, logs a telemetry event for the admin dashboard, and returns a
+// warmth-appropriate thank-you. Overwrite-safe — a student can revise their
+// rating (e.g. rate 3, apply an edit, rate 5). Never advances state.
+function handleRating(session, phoneHash, rating) {
+  const clamped = Math.max(1, Math.min(5, Number(rating) || 0));
+  const previous = Number(session.rating || 0);
+  session.rating = clamped;
+  session.rating_at = new Date().toISOString();
+  logEvent({
+    phoneHash,
+    eventName: 'rating_submitted',
+    state: session.state,
+    payload: { rating: clamped, previous: previous || null },
+  });
+  if (clamped <= 2) return pickMessage('ratingThanksLow', { r: clamped });
+  if (clamped === 3) return pickMessage('ratingThanksMid', { r: clamped });
+  return pickMessage('ratingThanksHigh', { r: clamped });
 }
 
 // Enters edit mode from DELIVERED (free budget) or PAID_COMPLETE (paid budget).
@@ -360,8 +385,17 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
 
   const current = session.state;
 
-  // --- DELIVERED: watermarked PDF sent. "pay" → create link; "edit" → edit loop. ---
+  // --- DELIVERED: watermarked PDF sent. "pay" → create link; "edit" → edit loop.
+  // Rating check runs FIRST so a bare "5" is captured as feedback, not
+  // fallthrough to deliveredHelp. Overwriteable — a student can revise their
+  // rating after applying edits and re-viewing the PDF.
   if (current === STATES.DELIVERED) {
+    const rateMatch = trimmed.match(RATE_RE);
+    if (rateMatch) {
+      const reply = handleRating(session, phoneHash, Number(rateMatch[1]));
+      await setSession(phoneHash, session);
+      return reply;
+    }
     if (PAY_RE.test(trimmed) && !unlocked(session)) {
       const reply = await startPayment(session, phoneHash);
       await setSession(phoneHash, session);
@@ -406,8 +440,15 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
   }
 
   // --- PAID_COMPLETE: clean PDF delivered. "edit" → 3 post-payment edits on the
-  // clean version; otherwise terminal ack. ---
+  // clean version; otherwise terminal ack. Rating micro-survey also lives
+  // here — students who paid can still rate the final clean copy. ---
   if (current === STATES.PAID_COMPLETE) {
+    const rateMatch = trimmed.match(RATE_RE);
+    if (rateMatch) {
+      const reply = handleRating(session, phoneHash, Number(rateMatch[1]));
+      await setSession(phoneHash, session);
+      return reply;
+    }
     if (EDIT_RE.test(trimmed)) {
       const reply = enterEdit(session);
       await setSession(phoneHash, session);
