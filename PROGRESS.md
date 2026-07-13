@@ -303,6 +303,50 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 
 **What's actually left before launch:** real end-to-end dry run on Railway (Meta → Railway → bot → PDF) with at least one real WhatsApp conversation — the fixes pushed today need a live confirmation that PDF generation now succeeds on a fresh persona. Then 2-3 friendly JECRC students before broadcasting to 100.
 
+### Session — 2026-07-13 (Multi-agent rewriter · edit fix · Meta BV content · Cashfree provider · pilot infrastructure, Claude Opus 4.7)
+
+Longest single session of the build. Five commits (`ca553de` → `8c8d419` → `4460930` → `2af67d7` → `3228497`), 3 architectural upgrades to the LLM pipeline, full Meta Business Verification content shipped, payment-provider swap, and business-side milestones locked in. Session started with Meta BV as the launch blocker and ended with BV submitted + a materially better rewriter/edit stack.
+
+**Business / infrastructure milestones (Meet-side, this session):**
+- **Meta Business Verification SUBMITTED** — Meta's "In review" screen reached. SLA: 2 business days. Post-approval unlocks 100-student broadcast (unpublished mode caps at 5 test recipients).
+- **Udyam Registration completed** on udyamregistration.gov.in — free MSME small-business proof. Uploaded as the primary legitimacy document for Meta BV. NIC 62099 (IT services). Sole proprietorship.
+- **Razorpay KYC APPROVED** 2026-07-13 morning (was rejected 2026-07-08 which triggered the Cashfree fallback build). Razorpay stays the primary payment provider going forward (`PAYMENT_PROVIDER=razorpay`); Cashfree code stays wired behind the flag as rollback.
+- **Cashfree KYC** also submitted during the Razorpay-rejection window as a backup — approved. Now dormant behind the flag but production-ready.
+- **OpenAI hard spend cap** set to $100/month with $10 low-threshold anomaly alert (Meet's Tier-1 default caps).
+- **Meta WhatsApp message template** submitted for approval (utility → forced to marketing by Meta classifier; accepted marketing recategorisation because launching a new service is by definition promotional first-touch).
+- **Support email standardised** to `help.resumebharat@gmail.com` (was `help.bharatresume@gmail.com` in every policy page and the guide). 21 replacements across 4 files.
+
+**Commit 1 — `ca553de`: Cashfree Payments provider (behind `PAYMENT_PROVIDER` flag).** Same shape as the earlier `WHATSAPP_PROVIDER=meta` migration. `src/payment/cashfree.js` (Payment Links v3 + HMAC(ts+body) verify + phone normaliser + Redis link→hash mapping), `src/payment/index.js` (dispatcher), `src/routes/cashfree.js` (handles both `PAYMENT_SUCCESS_WEBHOOK` and `PAYMENT_LINK_EVENT` — Meet's Cashfree tier only exposes the order-level event, so route resolves `phone_hash` in three tiers: `link_notes` → `order_tags` → Redis fallback). Session field renames to provider-agnostic `payment_id` + `payment_link_id` with legacy `razorpay_payment_id` grace for 24h. `test-payment-cashfree.js` in `.runtime/` (gitignored) locks the whole flow against real Cashfree sandbox. **Not in production use** now that Razorpay is approved, but stays behind the flag for one-flip rollback.
+
+**Commit 2 — `8c8d419`: Meta BV content (privacy · terms · data-deletion + submission guide).** `public/privacy.html` (13 sections, DPDP-Act-2023 compliant, cites §§6/7/8/11/12/13/14/16 explicitly, names every processor by legal entity + region), `public/terms.html` (refund policy that passes Consumer Protection E-Commerce Rules 2020, Jodhpur jurisdiction, Grievance Officer per DPDP §13), `public/data-deletion.html` (Meta-required, 30-day SLA, cites Income-tax Act §44AA for the 8-year payment-record retention exception). Wired via 3 explicit routes in `src/routes/admin.js` with 1h cache header. `docs/META_VERIFICATION_GUIDE.md` = the Phase-by-Phase submission playbook with every field value pre-filled + document checklist + app-icon design spec (1024×1024 navy/white "BR" monogram, Georgia Bold, exportable from Canva in 5 min) + rejection recovery matrix. **This unblocked the BV submission that landed later in the session.**
+
+**Commit 3 — `4460930`: Support-email correction.** Global rename `help.bharatresume@gmail.com` → `help.resumebharat@gmail.com` across privacy / terms / data-deletion / verification-guide (21 replacements). `meetkabra149@gmail.com` on SECURITY.md kept unchanged — separate security-disclosure channel by design.
+
+**Commit 4 — `2af67d7`: Multi-agent rewriter — MAJOR architecture change.** Live-test 2026-07-13 with Meet's real KPMG Data Analyst JD surfaced 3 quality gaps a single-pass rewriter cannot fix by prompting alone: (1) summary opened with "Project Lead" instead of the JD's "Data Analyst" role noun; (2) GitHub README fetched by extractor but never reached the rewriter, so JEIS's rich material collapsed into "Developed a decision tool for guar-gum exporter"; (3) summary emitted in same LLM call as body, so it couldn't reflect the polished bullets. Fix: 5-stage multi-agent pipeline in `src/state/generator.js#runGeneration`:
+  1. **JD scrape** (15s cap, was 10s — live-test showed successful scrapes finishing at ~13.5s so old cap fired just before success).
+  2. **JD Intelligence agent** (`src/llm/keywords.js` — upgraded from plain keyword extractor to a structured profile: `role_noun`, `role_title`, `domain`, `experience_level`, `key_responsibilities[3-5]`, `top_prioritized_skills[5-10]`, `keywords[15]`).
+  3. **Body rewriter** (`src/llm/rewrite.js#rewriteBody`) — rewrites everything EXCEPT summary; consumes per-project `readme_excerpt` (persisted by `src/state/router.js` onto `pending_project.readme_excerpt` during AWAITING_PROJECTS); reorders skills within each category by `top_prioritized_skills`.
+  4. **Summary rewriter** (`src/llm/rewrite.js#rewriteSummary`) — takes the polished body + JD intel; opens with `jd_intel.role_noun` verbatim; leads with the strongest body fact aligned to THAT role's angle.
+  5. **Deterministic ATS scoring + LLM Reviewer** (`src/llm/review.js` — NEW) — 2-4 JD-anchored improvement suggestions, merged with deterministic scorer output.
+Total pipeline 16-22s end-to-end on Railway (async webhook budget is comfortably 60s). Meet's KPMG scenario after the change: summary opens **"Data Analyst skilled in Power BI and SQL who developed an end-to-end analytics pipeline processing 12,828 rows of data, ensuring data accuracy through a 20-expectation validation suite. Proven experience in cross-functional collaboration as Project Lead for Rajasthan's largest student MUN with 450+ delegates…"**, JEIS bullets now cite specific README facts (12,828 rows / 20-expectation validation / ₹363.8 Cr concentrated buyer risk / -8.0% correction), and skills lead with Power BI + SQL (JD-prioritized). `.runtime/test-multiagent.js` reproduces Meet's exact scenario with 10 quality assertions — all green. Regression suite (`smoke-router`) still green — the Backend Engineer scenario proves architecture generalizes to any tech role. `[[bharat-resume-rewriter-architecture]]` memory rewritten.
+
+**Commit 5 — `3228497`: Trust-critical edit fix + 4 UX/quality upgrades from live-test.** Meet ran an edit test with `"Add these certificates\n\nNeural Networks & Deep Learning\n\nIntroduction to AI, Data Science & Ethics"` — bot replied "Updated ✓ 2 edits left" but `resume.certifications` stayed empty (silent-drop, consumed an edit budget while applying nothing). Root cause: single-call edit prompt treated cert-without-URL as needing clarification, so LLM emitted `certifications:[]` AND `clarification_needed:null`. Rebuilt `src/llm/edit.js` as a 2-stage pipeline:
+  - **Stage 1 — classifyIntent** (LLM parses free-text into `{section, action, items_to_add, target_reference, new_value, modify_instruction, clarification_needed}`). Handles multi-line natural language, terse phrases, Hinglish, English, listy inputs.
+  - **Stage 2 — applyDeterministic first** (safe adds/removes/contact changes), falls through to `applyWithLlm` for rephrase/modify/reorder.
+  - **Stage 3 — STRUCTURAL INTEGRITY GUARD (preserved from 2026-06-24) + anti-silent-drop guard** — if action='add' but target section didn't grow, return clarification instead of "updated ✓".
+Plus in the same commit: **near-compulsory GitHub for tech projects** — `src/llm/extract.js` now asks TWICE before accepting a link decline (via `pending_project._link_ask_count` counter); second ask is softer ("bina README ke bullets 40% weaker aate hain"). **Structured section-intro pointers in `src/state/prompts.js`** — every multi-fact section (Experience, Projects.technical, Projects.general, PoR, Certs, Achievements) now opens with a numbered 4-point checklist so students hit sufficiency in one message instead of 4-5 back-and-forth turns. **Interview hot topics from Reviewer** — `src/llm/review.js` extended to also output 4-5 CONCRETE interview prep topics anchored to THIS candidate's resume + THIS JD (e.g. "Data accuracy validation — discuss your 20-expectation validation suite and its impact on data integrity"). Surfaced in preview under "Prep for interview". **Double-check caution in final preview** — closing line: "⚠️ Zaroor: PDF khol ke poora resume review kar lo bhejne se pehle — koi fact / metric / date galat lage to 'edit' bolke fix karo." Preview char cap bumped 900 → 1800 to fit all the new sections.
+
+**Regression contract status:** `smoke-router` still fully green with the new multi-agent + new edit architecture. `.runtime/test-multiagent.js` 10/10 assertions. Edit regression: cert-multi-line + email + achievement + vague-input-clarify all correct. Not-yet-tested: full `npm run check` end-to-end (some suites have hard-coded assertions on old single-pass rewriter shape — need one pass to update).
+
+**Open items pushed to future sessions:**
+- README + `docs/DECISIONS.md` polish (held for later — Meet owes screenshots / demo GIF / optional logo before this ships).
+- Full `npm run check` sweep to update assertions for multi-agent shape.
+- Meta App icon final version (Canva placeholder is fine for BV; a real designed mark would be better for GitHub / marketing).
+
+**Files not committed but modified locally:** `README.md` (draft rewrite from earlier session, waiting for assets), `PROGRESS.md` (this entry), `docs/DECISIONS.md` (new decisions log split from old README, uncommitted), `e2e_da_resume.pdf` (untracked artifact from a prior manual test).
+
+---
+
 ### Session — 2026-06-26 (Hybrid Phase B → friend live-test → rewriter audit → ATS preview redesign, Claude Opus 4.7)
 
 Long single session that took the hybrid LLM-reply work from Phase A scaffolding to a fully-wired, friend-tested state, AND surfaced+fixed a wave of quality issues in the rewriter / extractor pipeline that had been latent for four days. Five commits. Bot survived a real live-test by Meet; one round-trip of fix-and-retest landed clean.
@@ -414,7 +458,7 @@ PoR is the only multi-entry-shaped section still single-entry — flagged as a f
 While planning friend-testing for tomorrow's 25 Jun launch, surfaced a hard gate I hadn't fully scoped: **Meta App Mode**.
 
 **Findings from the live Meta dashboard:**
-- App name: `Bharat Resume bot` · App ID `4061685003963331` · Contact email `help.bharatresume@gmail.com`.
+- App name: `Bharat Resume bot` · App ID `4061685003963331` · Contact email `help.resumebharat@gmail.com`.
 - Status: **Unpublished** (sidebar shows "Publish — Unpublished" badge — that's Meta's current name for what used to be "Development mode"; there is no separate toggle).
 - **Test recipient cap while unpublished: 5 phone numbers.** Inbound from anyone hits webhook; outbound only delivers to verified test recipients. Without verification on the recipient side (Meta sends a WhatsApp OTP, they tap to accept), the friend sees silence.
 - To send messages to arbitrary numbers (the 100-student broadcast), the app MUST be Published. Publishing requires:
