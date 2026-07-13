@@ -37,7 +37,7 @@ Write these down and paste them verbatim in every field Meta asks for. Any misma
 | **Doing-business-as name / brand name** | `Bharat Resume` |
 | **Registered address** | *(exactly as on your Aadhaar / utility bill)* — full postal address including PIN code, no abbreviations |
 | **Business phone** | *(your active mobile — the one that gets Meta's OTP)* |
-| **Business email** | `help.bharatresume@gmail.com` |
+| **Business email** | `help.resumebharat@gmail.com` |
 | **Business website** | `https://bharat-resume-production.up.railway.app` |
 | **Business category** | `Internet Software` (this maps cleanest to what we do) |
 | **Business type** | `Sole Proprietorship` |
@@ -82,7 +82,7 @@ Fill in **exactly** the following values:
 | Field | Value |
 |---|---|
 | **App Display Name** | `Bharat Resume` |
-| **App Contact Email** | `help.bharatresume@gmail.com` |
+| **App Contact Email** | `help.resumebharat@gmail.com` |
 | **Privacy Policy URL** | `https://bharat-resume-production.up.railway.app/privacy` |
 | **User Data Deletion** | Choose **"Data Deletion Instructions URL"** → paste `https://bharat-resume-production.up.railway.app/data-deletion` |
 | **Terms of Service URL** | `https://bharat-resume-production.up.railway.app/terms` |
@@ -121,7 +121,7 @@ Meta will ask you to confirm the info they have on file. Answer as follows:
 | **Legal name of business** | *your name as on PAN, exactly* — for example `Meet Kabra` |
 | **Business address** | *your registered address exactly as on Aadhaar / utility bill* |
 | **Business phone number** | *your active mobile in international format* — `+91XXXXXXXXXX` |
-| **Business email** | `help.bharatresume@gmail.com` |
+| **Business email** | `help.resumebharat@gmail.com` |
 | **Business website** | `https://bharat-resume-production.up.railway.app` |
 | **Country** | `India` |
 
@@ -147,7 +147,7 @@ Click **Next**.
 
 Meta will offer 1 – 2 methods to verify contact:
 
-- ✅ **Verify by email** — cheapest, most reliable. Meta sends a code to `help.bharatresume@gmail.com`. Paste the 6-digit code back.
+- ✅ **Verify by email** — cheapest, most reliable. Meta sends a code to `help.resumebharat@gmail.com`. Paste the 6-digit code back.
 - Optional: **Verify by phone (SMS/call)** — Meta sends OTP to your registered mobile. Works too. Use both if offered.
 
 ### 3.4 Submit
