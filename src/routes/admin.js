@@ -15,6 +15,21 @@ router.get('/payment-success', (_req, res) => {
   res.sendFile(path.join(__dirname, '..', '..', 'public', 'payment-success.html'));
 });
 
+// Public legal pages required for Meta Business Verification and DPDP Act
+// compliance. Kept as static HTML in /public — no templating, no analytics,
+// no dependencies. Long-cache headers so Meta's crawlers don't re-hit them.
+const PUBLIC_LEGAL_PAGES = [
+  { route: '/privacy', file: 'privacy.html' },
+  { route: '/terms', file: 'terms.html' },
+  { route: '/data-deletion', file: 'data-deletion.html' },
+];
+for (const { route, file } of PUBLIC_LEGAL_PAGES) {
+  router.get(route, (_req, res) => {
+    res.set('Cache-Control', 'public, max-age=3600');
+    res.sendFile(path.join(__dirname, '..', '..', 'public', file));
+  });
+}
+
 function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));

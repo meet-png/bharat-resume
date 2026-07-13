@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Data Deletion Instructions — Bharat Resume</title>
+<meta name="description" content="How to request deletion of your personal data from Bharat Resume, under the Digital Personal Data Protection Act, 2023 (India)." />
+<meta name="robots" content="index,follow" />
+<style>
+  :root {
+    --c-body: #111111;
+    --c-muted: #555555;
+    --c-accent: #1A3A5C;
+    --c-rule: #E5E5E5;
+    --c-bg: #FFFFFF;
+    --c-code-bg: #F6F6F4;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; color: var(--c-body); background: var(--c-bg); line-height: 1.65; font-size: 16px; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 56px 24px 96px; }
+  header.brand { border-bottom: 1px solid var(--c-rule); padding-bottom: 20px; margin-bottom: 36px; }
+  header.brand .logo { font-family: Georgia, "Times New Roman", serif; font-weight: 700; font-size: 20px; letter-spacing: 0.02em; color: var(--c-body); text-decoration: none; }
+  header.brand .tag { color: var(--c-muted); font-size: 13px; margin-top: 4px; }
+  h1 { font-family: Georgia, "Times New Roman", serif; font-size: 32px; line-height: 1.2; margin: 0 0 8px; color: var(--c-body); }
+  .meta { color: var(--c-muted); font-size: 13px; margin: 0 0 32px; }
+  h2 { font-size: 20px; margin: 40px 0 12px; padding-top: 24px; border-top: 1px solid var(--c-rule); color: var(--c-body); }
+  p, li { color: var(--c-body); }
+  a { color: var(--c-accent); text-decoration: underline; text-underline-offset: 2px; }
+  ul, ol { padding-left: 22px; }
+  ul li, ol li { margin: 6px 0; }
+  code { background: var(--c-code-bg); padding: 1px 6px; border-radius: 3px; font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0 20px; font-size: 14px; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--c-rule); vertical-align: top; }
+  th { background: var(--c-code-bg); font-weight: 600; }
+  .callout-highlight { background: #EEF6FF; border-left: 3px solid var(--c-accent); padding: 18px 22px; margin: 24px 0; border-radius: 3px; }
+  .callout-highlight strong { color: var(--c-accent); }
+  footer { margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--c-rule); color: var(--c-muted); font-size: 13px; }
+  footer a { color: var(--c-muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="brand">
+  <a class="logo" href="/">BHARAT RESUME</a>
+  <div class="tag">India's WhatsApp-native AI resume builder for college students.</div>
+</header>
+
+<h1>Data Deletion Instructions</h1>
+<p class="meta">Effective date: 13 July 2026 · Version 1.0</p>
+
+<p>You have the right to request deletion of your personal data from Bharat Resume under §12 of the Digital Personal Data Protection Act, 2023. This page tells you exactly how to make the request, what will be deleted, what will be retained, and how long it will take.</p>
+
+<div class="callout-highlight">
+  <strong>Fast path:</strong> email <a href="mailto:help.bharatresume@gmail.com?subject=Data%20Deletion%20Request&body=Please%20delete%20all%20personal%20data%20associated%20with%20my%20WhatsApp%20phone%20number%3A%20%2B91%20___________.%0A%0AName%3A%0AWhatsApp%20number%3A%0AApproximate%20date%20of%20last%20use%3A%0A%0AI%20confirm%20this%20request%20is%20made%20by%20me%20or%20on%20my%20authorised%20behalf.">help.bharatresume@gmail.com</a> with the subject line <strong>"Data Deletion Request"</strong>. We will confirm within 48 hours and complete deletion within 30 days.
+</div>
+
+<h2>1. How to make a request</h2>
+
+<p>Send an email to <a href="mailto:help.bharatresume@gmail.com">help.bharatresume@gmail.com</a> including all of the following:</p>
+
+<ol>
+  <li><strong>Subject line:</strong> <code>Data Deletion Request</code></li>
+  <li>Your full name (as provided to Bharat Resume).</li>
+  <li>The WhatsApp phone number you used to interact with the Service, in international format (for example, <code>+91 98765 43210</code>).</li>
+  <li>The email address you provided in the resume flow, if known.</li>
+  <li>An approximate date of your last use of the Service.</li>
+  <li>A confirmation statement: <em>"I confirm that this deletion request is made by me or by a person authorised on my behalf."</em></li>
+</ol>
+
+<p>If you are unable to send email, you may alternatively send this information as a WhatsApp message to Bharat Resume from the same phone number, including the phrase <em>"data deletion request"</em>.</p>
+
+<h2>2. What we will delete</h2>
+
+<p>On receipt of a verified request, we will delete or irreversibly anonymise all of the following:</p>
+
+<table>
+  <tr><th>Data</th><th>Where</th><th>Action</th></tr>
+  <tr><td>Session state (resume-in-progress JSON)</td><td>Upstash Redis cache</td><td>Deleted immediately</td></tr>
+  <tr><td>Generated resume PDF files (watermarked and clean)</td><td>Supabase Storage</td><td>Deleted</td></tr>
+  <tr><td>Hashed phone identifier and derived records</td><td>Supabase Postgres</td><td>Deleted</td></tr>
+  <tr><td>Telemetry events tied to your identifier</td><td>Supabase Postgres</td><td>Deleted or anonymised</td></tr>
+  <tr><td>Support email correspondence</td><td>Google Workspace (Gmail)</td><td>Anonymised or deleted, on your specific instruction</td></tr>
+</table>
+
+<h2>3. What we cannot delete (and why)</h2>
+
+<p>Certain records must be retained even after a deletion request, to comply with Indian law:</p>
+
+<ul>
+  <li><strong>Payment records</strong> — retained for <strong>8 years</strong> as required under §44AA of the Income-tax Act, 1961 for book-keeping and audit. These records contain only the payment amount, payment identifier and hashed reference; they do not contain your resume content.</li>
+  <li><strong>Fraud, dispute, and abuse investigation records</strong> — retained for the duration of the investigation, and thereafter for the period required by law.</li>
+  <li><strong>Copies of correspondence you have sent to us that we are legally required to retain</strong> — for example, communications relating to a formal legal notice or a regulatory investigation.</li>
+</ul>
+
+<p>The DPDP Act, 2023 §12(3) explicitly permits a Data Fiduciary to retain personal data notwithstanding a deletion request where retention is required by law or is necessary for the purpose for which it was collected. We rely on this provision only where clearly applicable.</p>
+
+<h2>4. Timelines</h2>
+
+<table>
+  <tr><th>Step</th><th>Timeline</th></tr>
+  <tr><td>Acknowledgement of request</td><td>Within 48 hours (business days)</td></tr>
+  <tr><td>Verification of identity (if we need to confirm the request came from you)</td><td>Within 7 days</td></tr>
+  <tr><td>Deletion completed</td><td>Within 30 days of receiving a verified request</td></tr>
+  <tr><td>Written confirmation of completion</td><td>Same day as deletion is completed</td></tr>
+</table>
+
+<h2>5. If you disagree with our response</h2>
+
+<p>If we decline any part of your request, we will explain why in writing (typically because retention is legally required). You may then:</p>
+<ul>
+  <li>Reply to our email to seek further clarification.</li>
+  <li>Escalate to our <strong>Grievance Officer</strong>, Meet Kabra, at <a href="mailto:help.bharatresume@gmail.com">help.bharatresume@gmail.com</a>.</li>
+  <li>File a complaint with the <strong>Data Protection Board of India</strong> once its procedural rules are notified.</li>
+</ul>
+
+<h2>6. Related pages</h2>
+<ul>
+  <li><a href="/privacy">Privacy Policy</a> — full description of what we collect, why, and your rights.</li>
+  <li><a href="/terms">Terms of Service</a> — service terms, refund policy, dispute resolution.</li>
+</ul>
+
+<footer>
+  <p>© 2026 Bharat Resume · <a href="/privacy">Privacy Policy</a> · <a href="/terms">Terms of Service</a> · <a href="mailto:help.bharatresume@gmail.com">help.bharatresume@gmail.com</a></p>
+</footer>
+
+</div>
+</body>
+</html>
