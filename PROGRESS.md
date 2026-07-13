@@ -303,6 +303,38 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 
 **What's actually left before launch:** real end-to-end dry run on Railway (Meta → Railway → bot → PDF) with at least one real WhatsApp conversation — the fixes pushed today need a live confirmation that PDF generation now succeeds on a fresh persona. Then 2-3 friendly JECRC students before broadcasting to 100.
 
+### Session — 2026-07-14 (Full check green · landing page · welcome + rating · pilot ops locked in, Claude Opus 4.7)
+
+Continuation of the long 2026-07-13 session (session ran through midnight). Focus: hardening + operational readiness. Four commits (`9ed863e` → `65fedde` → `8c4b011` plus PROGRESS). No new architecture — just closing loops.
+
+**Regression check went full green.** `npm run check` ran end-to-end for the first time since the multi-agent rewrite. Only 2 failures out of 14: `test-edit` and `test-edit-isolation` were flaky (~1 in 3) because the new applyWithLlm LLM apply prompt was returning `{resume: null, clarification_needed: null}` for `reorder` and `add experience` intents at temperature 0.2. **Fixed in `9ed863e`**: extended `applyDeterministic` in `src/llm/edit.js` to handle experience/PoR adds + skills reorder ("move X above Y", "put X first" regex-parsed), and added a one-retry fallback at temperature 0.05 in `applyWithLlm` for the residual long-tail cases. After the fix: `npm run check` 14/14 green, ~487s, ~$0.05 OpenAI. Also fixed a Windows-specific `spawn 'node'` issue in `.runtime/check.js` — used `process.execPath` instead of the bare string.
+
+**Root landing page shipped (`65fedde`).** Razorpay's KYC-approved status doesn't unlock live API keys directly — there's a SEPARATE 24-48h website/app-approval step where their reviewer fetches the root URL to verify the site describes a functional business. Our root was returning nothing (only `/privacy`, `/terms`, `/data-deletion`, `/health`, `/admin/metrics` had handlers), risking auto-rejection. New `public/index.html` — single-file landing page with hero + 4-step "How it works" + 6-feature grid + ₹49 pricing card + 7-question FAQ + branded footer. Style matches the legal pages (Georgia headers, navy accent, sans body, single-column, responsive, no external assets, no analytics beacons). Wired via new `GET /` route in `src/routes/admin.js` with 1h cache header. Meet then submitted `https://bharat-resume-production.up.railway.app` to Razorpay for website review — 24-48h clock started.
+
+**Warmer welcome + post-PDF rating micro-survey (`8c4b011`).** Two pilot-critical UX polishes:
+- **NEW / AWAITING_CONFIRM_START copy revamp** — students arriving after replying YES to the Marketing template were hitting a copy-heavy confirmation gate. Rewrote all 4 NEW variants + 4 AWAITING_CONFIRM_START variants: warm greeting, 1-line expectation-setter, commands on ONE line, softer confirmation ask.
+- **Post-PDF rating micro-survey** — new `RATE_RE` matches "5", "4/5", "5 stars", "rate 5" etc. after PDF delivery. Checked FIRST in DELIVERED + PAID_COMPLETE handlers. `handleRating()` stores rating on session + logs `rating_submitted` telemetry event. Three tiered responses (`ratingThanksLow/Mid/High`) — 1-2 gets apologetic fix nudge, 3 gets polish ask, 4-5 gets share-with-recruiters push. `buildPreview` shows subtle "⭐ Reply 1-5 to rate this resume" line only when unrated. Doesn't false-trigger on `6` or `abc`.
+
+**Business / infrastructure milestones locked in TODAY:**
+- **OpenAI hard cap** at $100/month with $10 low-threshold anomaly alert.
+- **UptimeRobot** free-tier monitor on `/health`, 5-min interval, email alerts.
+- **Railway env vars fully verified** — `PILOT_MODE=true`, `PHONE_HASH_SECRET`, `SUPABASE_SERVICE_ROLE_KEY`, `RENDER_CONCURRENCY`, `PAYMENT_PROVIDER=cashfree` (until Razorpay live keys unlock), all `META_*` set.
+- **5 test recipient phone numbers** added to the Meta WhatsApp allowlist — pre-warmed so post-BV-approval testing starts immediately without OTP delays.
+- **Live end-to-end test on Meet's own WhatsApp**: full flow → PDF received → edit tested → all green.
+- **Razorpay website review SUBMITTED** — 24-48h clock started (live keys unlock after this + KYC).
+
+**Deferred to tomorrow (2026-07-15) — Meet's explicit call:**
+- **New dedicated phone number registration on Meta.** SIM active, no WhatsApp on it, standard consumer number. Meet needs to go to Meta WhatsApp Manager → Phone Numbers → Add Phone Number → OTP verify → set 6-digit two-step PIN → send new `META_PHONE_NUMBER_ID` here so I can update Railway env.
+- **GitHub content polish** — full README rewrite + `docs/DECISIONS.md` still uncommitted, waiting on Meet's assets: WhatsApp demo GIF/MP4 (20-40s screen recording of a real conversation ending with a PDF), sample generated resume PDF (redacted friend's or synthetic), logo (or approve text-only "BR" navy monogram as placeholder), license choice (MIT recommended).
+- **Social media setup** — Instagram + LinkedIn + X + YouTube for `@bharatresume`/`@bharat.resume`/`@bharatresume.in` (check availability across all 4). Bio copy, profile photo spec, first-post copy, 7-day content calendar — all queued.
+
+**Approval clocks still ticking (nothing to do but watch inbox):**
+- Meta Business Verification (in review from 2026-07-13, SLA Wed/Thu).
+- Meta WhatsApp Marketing template (submitted 2026-07-13, usually 1-2h — check WhatsApp Manager).
+- Razorpay website/app review (submitted 2026-07-14, 24-48h).
+
+---
+
 ### Session — 2026-07-13 (Multi-agent rewriter · edit fix · Meta BV content · Cashfree provider · pilot infrastructure, Claude Opus 4.7)
 
 Longest single session of the build. Five commits (`ca553de` → `8c8d419` → `4460930` → `2af67d7` → `3228497`), 3 architectural upgrades to the LLM pipeline, full Meta Business Verification content shipped, payment-provider swap, and business-side milestones locked in. Session started with Meta BV as the launch blocker and ended with BV submitted + a materially better rewriter/edit stack.
