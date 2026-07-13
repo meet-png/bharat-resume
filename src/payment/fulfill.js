@@ -53,6 +53,10 @@ async function fulfillPayment({ phoneHash, paymentId, linkId }, deps = {}) {
     // Point of no return: record the payment BEFORE attempting delivery so a
     // later failure can never undo it.
     session.paid = true;
+    session.payment_id = paymentId;
+    session.payment_link_id = linkId || session.payment_link_id;
+    // Legacy field names kept while old sessions age out (24h TTL). Safe to
+    // remove after Cashfree cutover has been live > 24h.
     session.razorpay_payment_id = paymentId;
     session.razorpay_payment_link_id = linkId || session.razorpay_payment_link_id;
     await setSession(phoneHash, session);

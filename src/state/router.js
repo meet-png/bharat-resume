@@ -4,7 +4,7 @@ const { pickPrompt, pickMessage, expSlotQuestion } = require('./prompts');
 const { extractSection, SECTION_CONFIG } = require('../llm/extract');
 const { runGeneration, buildPreview } = require('./generator');
 const { deliverPdf } = require('./delivery');
-const { createPaymentLink } = require('../payment/razorpay');
+const { createPaymentLink } = require('../payment');
 const { applyEdit } = require('../llm/edit');
 const { respond } = require('../llm/respond');
 const { scoreResume, suggestionsFor } = require('../resume/ats_score');
@@ -124,27 +124,42 @@ async function tryGenerate(session, phoneFrom, phoneHash) {
   }
 }
 
-// Creates (or re-sends) the ₹49 Razorpay link and moves to AWAITING_PAYMENT.
-// Caller persists the session. Returns a string reply.
+// Creates (or re-sends) the ₹49 payment link and moves to AWAITING_PAYMENT.
+// Provider selected by config.PAYMENT_PROVIDER — Razorpay ignores extra
+// customer_details; Cashfree requires them, so we pass phone/name/email either way.
 async function startPayment(session, phoneHash) {
-  // Re-use an existing link if one was already created for this session.
   if (session.payment_link_url) {
     session.state = STATES.AWAITING_PAYMENT;
     return pickMessage('paymentLink', { url: session.payment_link_url });
   }
   try {
-    const link = await createPaymentLink({ phoneHash });
+    const link = await createPaymentLink({
+      phoneHash,
+      phone: session.phone_from,
+      name: session.resume_json && session.resume_json.name,
+      email: session.resume_json && session.resume_json.email,
+    });
+    session.payment_link_id = link.id;
+    // Legacy field name kept while old sessions age out (24h TTL). Safe to
+    // remove after the Cashfree cutover has been live > 24h.
     session.razorpay_payment_link_id = link.id;
     session.payment_link_url = link.short_url;
     session.state = STATES.AWAITING_PAYMENT;
     logEvent({ phoneHash, eventName: 'payment_link_created', state: STATES.AWAITING_PAYMENT, payload: { amount: 49 } });
     return pickMessage('paymentLink', { url: link.short_url });
   } catch (e) {
-    // Razorpay SDK errors carry no `.message`; the reason lives in
-    // e.statusCode / e.error.{code,description}. Capture both so prod failures
-    // are diagnosable (e.g. 429 test-mode quota, auth, or link-config issues).
+    // Provider errors carry different shapes. Razorpay: e.error.{code,description}.
+    // Cashfree: e.statusCode + e.cfCode + e.cfDesc. Log both so prod issues are
+    // diagnosable regardless of active provider.
     logger.error(
-      { err: e.message, statusCode: e.statusCode, rzpCode: e.error && e.error.code, rzpDesc: e.error && e.error.description },
+      {
+        err: e.message,
+        statusCode: e.statusCode,
+        rzpCode: e.error && e.error.code,
+        rzpDesc: e.error && e.error.description,
+        cfCode: e.cfCode,
+        cfDesc: e.cfDesc,
+      },
       'createPaymentLink failed',
     );
     return pickMessage('paymentLinkFailed');

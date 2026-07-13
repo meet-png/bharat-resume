@@ -8,6 +8,7 @@ const logger = require('./logger');
 const twilioRouter = require('./routes/twilio');
 const whatsappRouter = require('./routes/whatsapp');
 const razorpayRouter = require('./routes/razorpay');
+const cashfreeRouter = require('./routes/cashfree');
 const adminRouter = require('./routes/admin');
 
 const app = express();
@@ -20,9 +21,12 @@ app.disable('x-powered-by');
 app.use(helmet({ contentSecurityPolicy: false })); // CSP off for now; payment-success.html is the only HTML.
 app.use(pinoHttp({ logger }));
 
-// /webhook/razorpay and /webhook/whatsapp need the raw body for HMAC, so they
-// mount their own body parsers inside the router BEFORE these global parsers run.
+// Payment + WhatsApp webhooks need raw body for HMAC, so they mount their own
+// body parsers inside the router BEFORE these global parsers run. Both payment
+// routes stay wired — active provider is selected by config.PAYMENT_PROVIDER,
+// the inactive route just never receives traffic.
 app.use('/webhook/razorpay', razorpayRouter);
+app.use('/webhook/cashfree', cashfreeRouter);
 app.use('/webhook/whatsapp', whatsappRouter);
 
 app.use(express.json({ limit: '100kb' }));

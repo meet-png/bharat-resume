@@ -39,6 +39,14 @@ const schema = z.object({
   RAZORPAY_KEY_SECRET: z.preprocess(emptyAsUndefined, z.string().optional()),
   RAZORPAY_WEBHOOK_SECRET: z.preprocess(emptyAsUndefined, z.string().optional()),
 
+  // Payment provider. Kept behind a flag so a bad Cashfree behaviour lets us
+  // fall back to Razorpay via one env flip (mirrors WHATSAPP_PROVIDER shape).
+  PAYMENT_PROVIDER: z.preprocess(emptyAsUndefined, z.enum(['razorpay', 'cashfree']).default('cashfree')),
+  CASHFREE_ENV: z.preprocess(emptyAsUndefined, z.enum(['sandbox', 'production']).default('sandbox')),
+  CASHFREE_APP_ID: z.preprocess(emptyAsUndefined, z.string().optional()),
+  CASHFREE_SECRET_KEY: z.preprocess(emptyAsUndefined, z.string().optional()),
+  CASHFREE_WEBHOOK_SECRET: z.preprocess(emptyAsUndefined, z.string().optional()),
+
   // Optional: GitHub PAT raises unauthenticated rate-limit (60/hr) to 5000/hr.
   // Used by src/enrichment/github.js for project repo enrichment.
   GITHUB_TOKEN: z.preprocess(emptyAsUndefined, z.string().optional()),
