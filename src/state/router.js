@@ -545,6 +545,24 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
       const preMergeBullets = ((session.resume_json.pending_project || {}).bullets || []).length;
       SECTION_CONFIG[current].merge(session.resume_json, data);
       const postMergeBullets = ((session.resume_json.pending_project || {}).bullets || []).length;
+
+      // Persist the raw README on the pending project so the rewriter can mine
+      // it directly for architecture / feature / decision bullets. The extractor
+      // sees the README but the rewriter (a separate LLM call) previously did
+      // not, producing shallow paraphrases of the extractor's output. Live-test
+      // 2026-07-13: Meet's JEIS project rendered as "Developed a decision tool
+      // for guar-gum exporter" instead of "Architected weekly-refreshing ETL
+      // pipeline… 12,828 rows, 20/20 validation" because the README with those
+      // exact facts never reached the rewrite pass.
+      if (repoEnrichment && repoEnrichment.readme && session.resume_json.pending_project) {
+        session.resume_json.pending_project.readme_excerpt = repoEnrichment.readme.slice(0, 2500);
+        if (repoEnrichment.description && !session.resume_json.pending_project.repo_description) {
+          session.resume_json.pending_project.repo_description = repoEnrichment.description;
+        }
+        if (repoEnrichment.languages && Array.isArray(repoEnrichment.languages)) {
+          session.resume_json.pending_project.repo_languages = repoEnrichment.languages;
+        }
+      }
       logger.info({
         phoneHash: phoneShort, state: current, usage,
         enriched: !!repoEnrichment,

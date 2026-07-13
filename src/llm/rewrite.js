@@ -1,37 +1,107 @@
-// Resume rewriter. PRD §7.2 — the core call.
-// Takes raw resume_json + JD context → returns resume_json_rewritten with
-// action-verb bullets, impact-oriented summary, role-tailored framing.
-// Voice locked to docs/template-reference.md (Meet's actual resume).
+// Multi-agent resume rewriter. PRD §7.2 architecture upgraded 2026-07-13.
 //
-// Rule of rules: NEVER invent facts. If the student didn't say "led team of 5",
-// we don't write "led team of 5". Hinglish input → professional English out.
+// The rewriter runs in TWO PASSES orchestrated by state/generator.js:
+//
+//   Pass 1 — rewriteBody   : rewrites every section EXCEPT the summary.
+//                             Consumes: raw resume_json (incl. per-project
+//                             readme_excerpt) + JD Intelligence profile.
+//                             Reason for split: the summary must reflect the
+//                             POLISHED body, not the raw input. Doing both in
+//                             one call means the summary is authored from the
+//                             raw input and never sees its own body — result
+//                             feels detached and generic.
+//
+//   Pass 2 — rewriteSummary : takes the polished body + JD intel and authors
+//                             ONLY the summary. Opens with the JD's role_noun,
+//                             leads with the strongest body fact aligned to
+//                             THAT role's angle (not the strongest fact overall).
+//                             Live-test 2026-07-13: single-pass rewriter picked
+//                             MUN as the opener for a Data Analyst JD because
+//                             MUN scale looked more "distinctive"; two-pass
+//                             with JD role_noun as an opener rule fixes it.
+//
+// Rule of rules: NEVER invent facts. The rules that used to live in the
+// single-call prompt (voice, bullet-count table, ROLE-IMPLICIT carve-out,
+// PROJECT ANCHOR IDENTITY, action-verb palette) are preserved verbatim in
+// rewriteBody. rewriteSummary is a smaller focused prompt.
 const { complete } = require('./client');
 
-async function rewriteResume({ resumeJson, jdRole, jdText, jdKeywords, jdGeneric, phoneFrom }) {
-  let jdContext;
+// ─────────────────────────────────────────────────────────────────────────
+// JD context block used by both passes. Priority: JD intel > jd text > role.
+// ─────────────────────────────────────────────────────────────────────────
+function buildJdContextBlock({ jdIntel, jdText, jdRole, jdKeywords, jdGeneric }) {
   if (jdGeneric) {
-    jdContext = `MODE: GENERIC RESUME (no target role).
+    return `MODE: GENERIC RESUME (no target role).
 Frame for broad applicability. Emphasize transferable skills and concrete outcomes. Avoid role-specific jargon.`;
-  } else if (jdText) {
-    jdContext = `TARGET JD (excerpt):
+  }
+  if (jdIntel && jdIntel.role_noun && jdIntel.role_noun !== 'candidate') {
+    return `TARGET JD PROFILE (structured intelligence from the JD text):
+  - Role noun (open the summary with this exact noun): "${jdIntel.role_noun}"
+  - Full title: "${jdIntel.role_title || jdIntel.role_noun}"
+  - Domain: ${jdIntel.domain || 'generic'}
+  - Experience level target: ${jdIntel.experience_level || 'fresher'}
+  - Key responsibilities the JD calls out:
+    ${(jdIntel.key_responsibilities || []).map((r) => `• ${r}`).join('\n    ') || '• (none extracted)'}
+  - JD-prioritized skills (ORDER matters — most important first). Use these ONLY where the student actually has the skill; NEVER invent:
+    ${(jdIntel.top_prioritized_skills || []).join(', ') || '(none)'}
+  - Full keyword list from the JD (same rule — only where student has the skill):
+    ${(jdIntel.keywords || jdKeywords || []).join(', ') || '(none)'}
+
+${jdText ? `Full JD excerpt for phrasing cues (do NOT copy verbatim):\n"""${jdText.slice(0, 1500)}"""` : ''}`;
+  }
+  if (jdText) {
+    return `TARGET JD (excerpt):
 """${jdText.slice(0, 1500)}"""
 
-KEYWORDS to use WHERE the student actually has the skill (NEVER claim what isn't there):
+Keywords to use WHERE the student actually has the skill (NEVER claim what isn't there):
 ${(jdKeywords || []).join(', ')}`;
-  } else if (jdRole) {
-    jdContext = `TARGET ROLE: "${jdRole}"
+  }
+  if (jdRole) {
+    return `TARGET ROLE: "${jdRole}"
 
 Tailor framing, action verbs, and metric vocabulary to this role's domain.
 Typical keywords for this role (use ONLY where student actually has the skill):
 ${(jdKeywords || []).join(', ')}`;
-  } else {
-    jdContext = 'MODE: GENERIC RESUME.';
   }
+  return 'MODE: GENERIC RESUME.';
+}
 
-  const cleanedResume = { ...resumeJson };
-  delete cleanedResume.pending_project;
+// ─────────────────────────────────────────────────────────────────────────
+// Prepare projects with README excerpts inlined into the input the LLM sees.
+// The extractor already stored readme_excerpt on each project via router.js;
+// here we make the LLM aware of it as first-class fact-material, not just an
+// afterthought. If a project has NO readme_excerpt, this is a no-op.
+// ─────────────────────────────────────────────────────────────────────────
+function inlineReadmesForRewrite(resumeJson) {
+  const clone = { ...resumeJson };
+  delete clone.pending_project;
+  if (!Array.isArray(clone.projects)) return clone;
+  clone.projects = clone.projects.map((p) => {
+    if (!p) return p;
+    const project = { ...p };
+    // The rewriter reads readme_excerpt inline (not by fetching); the extractor
+    // captured it at the moment the student mentioned the repo. If we ever add
+    // an "update project" flow, we should re-capture here.
+    if (project.readme_excerpt && project.readme_excerpt.length > 100) {
+      // Cap the excerpt at 1800 chars per project so 4 projects fit in prompt
+      // context without pushing us into a longer/slower call.
+      project.readme_excerpt = String(project.readme_excerpt).slice(0, 1800);
+    }
+    return project;
+  });
+  return clone;
+}
 
-  const system = `You are a resume writer for the Indian job market. Rewrite the given resume JSON into impact-oriented, ATS-friendly English. Output the SAME JSON schema with rewritten content.
+// ─────────────────────────────────────────────────────────────────────────
+// PASS 1: body rewrite.
+// Rewrites every section EXCEPT the summary. The summary field is written back
+// as an empty string; PASS 2 (rewriteSummary) fills it in.
+// ─────────────────────────────────────────────────────────────────────────
+async function rewriteBody({ resumeJson, jdIntel, jdRole, jdText, jdKeywords, jdGeneric, phoneFrom }) {
+  const jdContext = buildJdContextBlock({ jdIntel, jdText, jdRole, jdKeywords, jdGeneric });
+  const cleanedResume = inlineReadmesForRewrite(resumeJson);
+
+  const system = `You are a resume writer for the Indian job market. Rewrite the given resume JSON into impact-oriented, ATS-friendly English. Output the SAME JSON schema with rewritten content. **DO NOT write the summary field in this pass — leave it as empty string ""; a separate final pass will author it after the body is finalized.**
 
 ═══════════════════════════════════════════════════
 GOAL — HIGHEST POSSIBLE ATS SCORE, WITHOUT GAMING:
@@ -55,18 +125,8 @@ ATS optimization is a SIDE EFFECT of authentic resume quality. Write for the rec
 VOICE — modeled on a high-bar reference resume (see docs/template-reference.md):
 ═══════════════════════════════════════════════════
 
-1. SUMMARY (2-4 lines):
-   Structure: claim → mechanism → result, in three parts. Optionally close with a thesis sentence that frames the body as evidence.
-
-   Example shape (do NOT copy text — copy SHAPE and VOICE):
-   "Data and AI engineer who builds systems end-to-end — instrumented ETL pipelines, schema-driven LLM contracts, and dashboards that defend a falsifiable claim. Shipped a trade-data warehouse (12,828 rows, 20/20 validation) that overturned the 'September peak' assumption, an autonomous sales agent at ~\$0.04/conversation with a 15%+ booking rate, and an ICP-grounded content pipeline cutting copywriting cost ~99%. Every system has real numbers, not adjectives, behind it."
-
-   Rules:
-   - VOICE: standard resume summary voice — IMPERSONAL / implied-first-person. NEVER write the student's name. NEVER use third-person pronouns (he/she/they/"his/her") and NEVER narrate them by name ("Priya is a…", "Rohan developed…"). Also avoid explicit "I/my". Lead with a role noun or skill phrase: "Data analyst skilled in Looker and BigQuery who reduced query runtime from 40s to 6s…" — exactly how the reference resume templates read.
-   - **OPENER RULE (banned vs preferred):** the FIRST sentence determines whether the summary punches or feels generic. BAN these opener patterns: "B.Tech student passionate about…", "Final-year student interested in…", "Aspiring [role] with a passion for…", "Highly motivated individual…", "Enthusiastic learner…", "Driven student…". PREFER: open with a ROLE NOUN + most distinctive concrete fact from input — a shipped artifact + its metric, a competition result, a domain credential. Example shapes (copy SHAPE, not text): "Backend engineer who shipped a payment retry service handling **50K daily transactions** at Razorpay — reduced failures 18%, p99 latency 400ms → 60ms." OR "MUN Secretary General who directed Rajasthan's largest student MUN — **450+ delegates, ₹3L+ budget, zero deficit across two editions**." The strongest single fact GOES FIRST.
-   - Dense with metrics: every claim has a number behind it WHERE THE STUDENT PROVIDED ONE. Don't invent numbers. Skip the number if the student didn't give one.
-   - Mentions degree + year + 1-2 strongest concrete projects/outcomes/skills.
-   - Closing sentence (optional but recommended for strong inputs): a single thesis line that frames the body as evidence — e.g. "Every system has real numbers, not adjectives, behind it." Use sparingly; only when the body actually supports the claim.
+1. SUMMARY — **DO NOT WRITE IT IN THIS PASS.**
+   Leave the "summary" field as the empty string. A separate specialist pass will author it after seeing your finalized body. If you write anything in the summary field, it will be discarded.
 
 2. BULLETS — **TARGET 3 per entry** (god-level resumes carry 3 per role / project), selective bold on metric/outcome:
 
@@ -97,6 +157,14 @@ VOICE — modeled on a high-bar reference resume (see docs/template-reference.md
      • Bullet 3: IMPACT          (time/cost saved / business outcome / shipped — from input)
    Two strong, fact-grounded bullets > three with one invented.
 
+   *** PROJECT bullets — README MINING (critical, new 2026-07-13) ***
+   For any project whose input contains a \`readme_excerpt\` field, treat that README text as VERIFIABLE primary-source material from the student's own repo — mine it aggressively for bullet content. The extractor already tried once but rewrote sparingly; you now have the full excerpt and can author DEEPER bullets. Specifically:
+     - Look for named ARCHITECTURE DECISIONS (star schema, ETL pipeline, event-driven, JSON Schema contract, streaming pipeline, RAG, etc.) — surface them in a bullet.
+     - Look for named KEY FEATURES that make the project distinctive (validation gate, re-forecast slider, HITL loop, kill-switch, dedupe lock, etc.).
+     - Look for CONCRETE NUMBERS in the README (row counts, validation counts, test coverage %, users, forecast horizon, cost per unit) — these ARE fact-material; use them, bolded with \`**...**\`.
+     - Look for the DOMAIN insight or debunking (e.g. "the industry's September peak assumption was actually -8% below annual avg").
+   NEVER fabricate numbers absent from the README. Every metric in a bullet must trace back to either the README text or the student's own messages.
+
    PROJECT bullets — ANCHOR IDENTITY without compressing:
    The FIRST bullet of a PROJECT must establish WHAT the project IS (the one-line
    description / core feature from the input or README) AND fold ONE primary
@@ -104,6 +172,7 @@ VOICE — modeled on a high-bar reference resume (see docs/template-reference.md
    numbers with no statement of what it is — that reads as incomplete.
    **DO NOT pack every metric into bullet 1.** Additional substantive facts get
    their own bullets (bullet 2, bullet 3) — preserve depth, don't collapse it.
+
      Input: description "gamified habit-tracker with streaks & leaderboard"
             + metrics "300 signups", "1200+ habits tracked"
      WRONG: • About 300 developers signed up.   • 1200+ habits tracked.   (drops identity)
@@ -136,6 +205,7 @@ VOICE — modeled on a high-bar reference resume (see docs/template-reference.md
    - Design: Designed, Prototyped, Researched, Wireframed, Iterated, Validated
    - Sales: Closed, Sourced, Qualified, Prospected, Expanded, Negotiated
    - Finance: Audited, Reconciled, Forecasted, Modeled, Streamlined, Saved
+   - Consulting: Advised, Structured, Diagnosed, Mapped, Presented, Facilitated, Modeled
    - Civil/Mech: Designed, Drafted, Surveyed, Engineered, Coordinated, Delivered
    - Leadership/PoR: Directed, Secured, Chaired, Coached, Organized, Mentored
    PICK from the domain matching the TARGET ROLE.
@@ -149,13 +219,20 @@ VOICE — modeled on a high-bar reference resume (see docs/template-reference.md
 5. NEVER: invent metrics, claim skills not in input, use vague verbs ("worked on", "helped with", "assisted"), pad with soft adjectives, or bold the action verb.
 
 ═══════════════════════════════════════════════════
+JD-AWARE SKILLS PRIORITIZATION (new 2026-07-13):
+═══════════════════════════════════════════════════
+Look at the JD-prioritized skills list in the JD profile above. Within each of the student's skill CATEGORIES, REORDER items so that JD-prioritized skills come FIRST. Example — student has Python, R, SQL, Excel in "Languages" and JD prioritizes SQL + Excel: output "SQL, Excel, Python, R". Never REMOVE a skill the student listed, and NEVER ADD a skill the student did not list. Ordering only.
+
+You MAY rename or merge category labels to read sharply for the target role (e.g. "Other" → "ML / AI" or "Tools / DevOps"), and order CATEGORIES strongest-first for THIS JD. Never emit a category labelled "Other" / "Misc".
+
+═══════════════════════════════════════════════════
 ${jdContext}
 ═══════════════════════════════════════════════════
 
-INPUT resume_json:
+INPUT resume_json (each project may have a readme_excerpt with primary-source project material):
 ${JSON.stringify(cleanedResume, null, 2)}
 
-OUTPUT SCHEMA (return JSON only, this exact shape):
+OUTPUT SCHEMA (return JSON only, this exact shape — SUMMARY MUST BE EMPTY STRING):
 {
   "name": string,
   "email": string,
@@ -164,7 +241,7 @@ OUTPUT SCHEMA (return JSON only, this exact shape):
   "github": string | null,
   "leetcode": string | null,
   "coding_profiles": [{ "platform": string, "url": string | null, "stat": string | null }],
-  "summary": string,
+  "summary": "",
   "education": [{ "degree": string, "college": string, "branch": string | null, "location": string | null, "dates": string | null, "cgpa": string | null, "coursework": string | null }],
   "skills": [{ "category": string, "items": [string] }],
   "experience": [{ "role": string, "company": string, "location": string | null, "dates": string | null, "tech_stack": [string], "bullets": [string] }],
@@ -176,19 +253,14 @@ OUTPUT SCHEMA (return JSON only, this exact shape):
 
 Bullets are PLAIN STRINGS — include the \`**...**\` markdown markers around the metric inside the string. Example: "Architected an ETL pipeline ingesting 5 sources — **12,828 rows, 20/20 validation**."
 
-SKILLS: keep every item the student listed — NEVER add a skill they didn't provide. You MAY rename or merge the category labels to read sharply for the target role (e.g. "Other" → "ML / AI" or "Tools / DevOps"), and order categories strongest-first. Never emit a category labelled "Other"/"Misc".
-
 CONTACT FIELDS (name, email, linkedin, github, leetcode, coding_profiles, phone): echo them unchanged — they are re-attached verbatim downstream regardless, so do not alter URLs or counts.
 
-Sections the student left empty: keep as empty array (not null, not omitted).`;
+Sections the student left empty: keep as empty array (not null, not omitted).
 
-  const result = await complete({ system, user: 'rewrite the resume now', maxTokens: 2400, temperature: 0.2 });
+Do NOT copy the readme_excerpt field to the output — it is fact-material for you, not a resume field.`;
 
-  // Contact identifiers are user-provided FACTS, not prose to "improve". The
-  // rewriter is allowed to drop/normalize them, and an LLM silently mutating a
-  // URL (or hallucinating a username) puts a wrong link on someone's resume.
-  // Re-attach them verbatim from the source JSON so the model can never touch
-  // them — name/email/links are deterministic, not generated.
+  const result = await complete({ system, user: 'rewrite the body now (leave summary empty)', maxTokens: 2400, temperature: 0.2 });
+
   if (result.data) {
     if (resumeJson.name)  result.data.name = resumeJson.name;
     if (resumeJson.email) result.data.email = resumeJson.email;
@@ -199,11 +271,21 @@ Sections the student left empty: keep as empty array (not null, not omitted).`;
     if (phoneFrom) {
       result.data.phone = String(phoneFrom).replace(/^whatsapp:/i, '').replace(/[^\d+]/g, '');
     }
+    // Strip readme_excerpt / repo_description / repo_languages if the LLM
+    // accidentally echoed them into the output projects — they are input-side
+    // metadata, not resume content.
+    if (Array.isArray(result.data.projects)) {
+      result.data.projects = result.data.projects.map((p) => {
+        if (!p) return p;
+        const { readme_excerpt, repo_description, repo_languages, ...clean } = p;
+        return clean;
+      });
+    }
 
-    // Competitive-programming is highest-signal as an achievement WITH counts,
-    // not just a contact link (see top tech resumes). If the student gave any
-    // stat (problem count / rating), synthesize one factual achievement bullet
-    // deterministically — never via the LLM, so the numbers can't be inflated.
+    // Force empty summary — Pass 2 will fill it.
+    result.data.summary = '';
+
+    // Competitive-programming achievement synthesis (unchanged from single-pass).
     const withStats = result.data.coding_profiles.filter((c) => c && c.platform && c.stat);
     if (withStats.length > 0) {
       const parts = withStats.map((c) => `${c.platform}: **${c.stat}**`);
@@ -217,4 +299,88 @@ Sections the student left empty: keep as empty array (not null, not omitted).`;
   return result;
 }
 
-module.exports = { rewriteResume };
+// ─────────────────────────────────────────────────────────────────────────
+// PASS 2: summary rewrite.
+// Takes the POLISHED BODY + JD intel and authors ONLY the summary field.
+// Opens with the JD role_noun. Leads with the strongest body fact aligned to
+// that role's angle (not the strongest fact overall). Impersonal voice.
+// ─────────────────────────────────────────────────────────────────────────
+async function rewriteSummary({ body, jdIntel, jdText, jdRole, jdGeneric, rawResume }) {
+  if (!body) return { data: { summary: '' } };
+
+  const jdContext = buildJdContextBlock({ jdIntel, jdText, jdRole, jdGeneric, jdKeywords: jdIntel ? jdIntel.keywords : [] });
+  const roleNoun = jdIntel && jdIntel.role_noun && jdIntel.role_noun !== 'candidate' ? jdIntel.role_noun : (jdRole || null);
+
+  // Distil the body to what actually matters for summary authoring — the
+  // polished bullets, the strongest skills, the strongest project names.
+  // Keeps the prompt tight and forces the LLM to reason from the body, not
+  // re-derive from the raw input.
+  const distilled = {
+    name: body.name,
+    education: (body.education || []).map((e) => ({ degree: e.degree, college: e.college, branch: e.branch, dates: e.dates, cgpa: e.cgpa })),
+    skills: body.skills,
+    experience: (body.experience || []).map((e) => ({ role: e.role, company: e.company, dates: e.dates, bullets: e.bullets })),
+    projects: (body.projects || []).map((p) => ({ name: p.name, tech_stack: p.tech_stack, bullets: p.bullets })),
+    por: (body.por || []).map((p) => ({ role: p.role, organization: p.organization, bullets: p.bullets })),
+    achievements: body.achievements || [],
+  };
+
+  const system = `You are a senior resume editor. You have the POLISHED BODY of a resume in front of you plus the JD's structured profile. Your one job: author the SUMMARY (2-4 lines) that will sit at the top.
+
+CORE RULES (non-negotiable):
+
+1. **OPEN WITH THE JD's ROLE NOUN.** ${roleNoun ? `The FIRST WORDS of the summary MUST be "${roleNoun}" (verbatim) or a very close synonym, followed by "skilled in / who / with…" and the strongest supporting body facts.` : 'Open with a role noun that reflects what the student built, not a generic student descriptor.'} This is critical — the JD is targeting this role, and the recruiter scans the first line for a match. If the JD says "Data Analyst" and the body's strongest single fact is a large MUN, the opener is STILL "Data Analyst who…" and the MUN goes in the supporting clause. Never invert this.
+
+2. **IMPERSONAL voice.** Never write the student's name. Never use "I / my / me". Never use third-person pronouns (he/she/they). Lead with the role noun or a skill phrase. Every reference resume shape is impersonal — copy the shape:
+   - "Data analyst skilled in Looker and BigQuery who reduced query runtime from 40s to 6s…"
+   - "Backend engineer who shipped a payment retry service handling 50K daily transactions…"
+
+3. **THREE-PART SHAPE**: claim → mechanism → result. Optionally close with a thesis line ("Every system has real numbers, not adjectives, behind it.") ONLY when the body actually supports it. Bullet-drop the summary; make each sentence carry weight.
+
+4. **METRIC DENSITY**: every claim has a number behind it where the body has one. Pull the strongest numbers from the polished bullets (bolded metrics you can quote). Do NOT invent numbers. If the strongest body fact has no number, phrase it as a named artifact rather than a hollow adjective.
+
+5. **BANNED OPENERS** (auto-reject if you write one): "B.Tech student passionate about", "Final-year student interested in", "Aspiring [role] with a passion for", "Highly motivated individual", "Enthusiastic learner", "Driven student", "Student pursuing…". PREFER: open with the JD role noun + concrete strongest fact.
+
+6. **BAN OF UNSUPPORTED CLAIMS**: only claims backed by the polished body are permitted. If the body doesn't have a project in the JD's domain, don't PRETEND one exists. The rule is honest opening, not aspirational opening.
+
+7. **LENGTH**: 2-4 lines. Aim for 3. Dense with facts, not adjectives.
+
+═══════════════════════════════════════════════════
+${jdContext}
+═══════════════════════════════════════════════════
+
+POLISHED BODY (this is your only source of truth for facts; you MAY quote metrics that appear in the bullets, bolded with \`**...**\`):
+${JSON.stringify(distilled, null, 2)}
+
+Return JSON exactly:
+{ "summary": string }
+
+Nothing else. No prose, no code fence.`;
+
+  const result = await complete({ system, user: 'author the summary now', maxTokens: 500, temperature: 0.25 });
+
+  if (!result.data || typeof result.data.summary !== 'string') {
+    return { data: { summary: '' }, usage: result.usage };
+  }
+  return { data: { summary: result.data.summary.trim() }, usage: result.usage };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Back-compat facade for any caller that still expects a single rewriteResume
+// call producing the whole resume. Runs Pass 1, then Pass 2, and stitches
+// the summary into the body. Preserves the old return shape { data, usage }.
+// ─────────────────────────────────────────────────────────────────────────
+async function rewriteResume({ resumeJson, jdRole, jdText, jdKeywords, jdGeneric, jdIntel, phoneFrom }) {
+  const bodyRes = await rewriteBody({ resumeJson, jdIntel, jdRole, jdText, jdKeywords, jdGeneric, phoneFrom });
+  if (!bodyRes.data) return bodyRes;
+
+  const sumRes = await rewriteSummary({
+    body: bodyRes.data,
+    jdIntel, jdText, jdRole, jdGeneric,
+    rawResume: resumeJson,
+  });
+  bodyRes.data.summary = (sumRes.data && sumRes.data.summary) || '';
+  return bodyRes;
+}
+
+module.exports = { rewriteResume, rewriteBody, rewriteSummary };

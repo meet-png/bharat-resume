@@ -1,8 +1,25 @@
-// GENERATING-state orchestrator. PRD §5 Phase 3.
-// Sequence: scrape JD (if URL) → extract keywords → rewrite resume.
+// GENERATING-state orchestrator. PRD §5 Phase 3 — upgraded 2026-07-13 to
+// a MULTI-AGENT pipeline:
+//
+//   [Optional] Naukri JD scrape           → jd_text
+//   Stage A     JD Intelligence agent      → { role_noun, domain, key_responsibilities, top_prioritized_skills, keywords, experience_level }
+//   Stage B     Body rewrite (Pass 1)      → skills, experience, projects, PoR, achievements, certs (NO summary)
+//                                             — consumes per-project readme_excerpt for deeper bullet mining.
+//                                             — reorders skills by JD priority.
+//   Stage C     Summary rewrite (Pass 2)   → opens with JD role_noun, leads with the strongest body fact
+//                                             aligned to THAT role's angle.
+//   Stage D     Deterministic ATS scoring  → ats_score + baseline suggestions.
+//   Stage E     LLM ATS Reviewer agent     → contextual suggestions (missing keywords, generic verbs, thin bullets).
+//                                             Merged with Stage D suggestions.
+//
+// Stage A runs in PARALLEL with the JD scrape completing (no dependency chain).
+// Stage B waits for Stage A (needs the JD profile). Stage C waits for Stage B
+// (needs the polished body). Stage E can run parallel with Stage D. Realistic
+// end-to-end latency 15-22s on Railway — well under the 60s async webhook budget.
 const { scrapeNaukri } = require('../jd/scrape');
 const { extractKeywords } = require('../llm/keywords');
-const { rewriteResume } = require('../llm/rewrite');
+const { rewriteBody, rewriteSummary } = require('../llm/rewrite');
+const { reviewResume } = require('../llm/review');
 const { scoreResume, suggestionsFor } = require('../resume/ats_score');
 const logger = require('../logger');
 
@@ -24,76 +41,140 @@ async function runGeneration(session, phoneFrom) {
   const t0 = Date.now();
   const timings = {};
 
+  // ─────── Stage 0: JD scrape (if URL, and not already scraped) ───────
   if (session.jd_url && !session.jd_text) {
     const tScrape = Date.now();
-    const scraped = await withTimeout(scrapeNaukri(session.jd_url), 10000, null, 'scrape');
+    // 15s scrape budget: live-test 2026-07-13 showed the Naukri scraper
+    // finishing at ~13.5s on a first cold-run selector cascade (`[class*="jd-container"]`).
+    // The old 10s cap fired just before a successful scrape, forcing the rewriter
+    // to run on jd_role alone and losing the full JD text. 15s is comfortable
+    // under the async webhook budget and dramatically upgrades JD-intel quality.
+    const scraped = await withTimeout(scrapeNaukri(session.jd_url), 15000, null, 'scrape');
     timings.scrape_ms = Date.now() - tScrape;
     if (scraped) session.jd_text = scraped;
+    else logger.warn({ url: session.jd_url }, 'JD scrape returned empty — rewriter will run on jd_role/generic path only');
   }
 
-  // Parallelize keywords + rewrite. The rewriter uses keywords only as a
-  // "match where the student has the skill" hint — not load-bearing. Running
-  // both concurrently saves ~3-4s on the critical path (was ~10s before).
-  //
-  // TIMEOUTS: generously sized because the Meta webhook is ASYNC (ack-first —
-  // see routes/whatsapp.js POST: it returns 200 immediately, then processes and
-  // pushes the reply via a separate outbound API call). There is NO synchronous
-  // 15s webhook budget anymore — that was a Twilio TwiML constraint. The old 13s
-  // rewrite ceiling was clipping slow-but-valid rewrites on Railway's CPU
-  // (~10.3s locally → over 13s in prod), producing a null resume and the
-  // user-facing "PDF banane mein dikkat" failure. A resume taking ~20s is fine.
-  const tPar = Date.now();
-  const [kw, rewritten] = await Promise.all([
-    withTimeout(
-      extractKeywords({ jdText: session.jd_text, jdRole: session.jd_role, jdGeneric: session.jd_generic }),
-      12000,
-      { keywords: [], role_title: 'unknown', experience_level: 'fresher' },
-      'keywords'
-    ),
-    withTimeout(
-      rewriteResume({
-        resumeJson: session.resume_json,
-        jdRole: session.jd_role,
-        jdText: session.jd_text,
-        // Keywords not yet known — rewriter relies on role/JD context.
-        // For the v1 prototype the quality loss is negligible; can re-pass with keywords later if needed.
-        jdKeywords: [],
-        jdGeneric: session.jd_generic,
-        phoneFrom,
-      }),
-      60000, // 30s → 60s on 2026-06-23: client.js now retries once on transient
-             // transport errors (ERR_STREAM_PREMATURE_CLOSE et al). A 27s first
-             // attempt + 500ms backoff + ~27s retry needs ~55s headroom.
-      { data: null, usage: null },
-      'rewrite'
-    ),
-  ]);
-  timings.parallel_ms = Date.now() - tPar;
-  session.jd_keywords = kw.keywords || [];
-  session.jd_role_title = kw.role_title;
-  session.jd_experience_level = kw.experience_level;
-  session.resume_json_rewritten = rewritten.data;
-  session.rewrite_usage = rewritten.usage;
+  // ─────── Stage A: JD Intelligence agent ───────
+  // Produces role_noun, domain, key_responsibilities, top_prioritized_skills,
+  // full keyword list, and experience_level. Every downstream stage consumes
+  // this profile — one intelligence pass, many specialized consumers.
+  const tIntel = Date.now();
+  const jdIntel = await withTimeout(
+    extractKeywords({ jdText: session.jd_text, jdRole: session.jd_role, jdGeneric: session.jd_generic }),
+    12000,
+    { keywords: [], role_noun: session.jd_role || 'candidate', role_title: 'unknown', domain: 'generic', experience_level: 'fresher', key_responsibilities: [], top_prioritized_skills: [] },
+    'jd_intel'
+  );
+  timings.jd_intel_ms = Date.now() - tIntel;
+  session.jd_keywords = jdIntel.keywords || [];
+  session.jd_role_noun = jdIntel.role_noun;
+  session.jd_role_title = jdIntel.role_title;
+  session.jd_domain = jdIntel.domain;
+  session.jd_experience_level = jdIntel.experience_level;
+  session.jd_key_responsibilities = jdIntel.key_responsibilities || [];
+  session.jd_top_prioritized_skills = jdIntel.top_prioritized_skills || [];
 
-  // Distinct, greppable signal: the rewrite produced no data (LLM timeout or
-  // error). Everything downstream (PDF, preview) will fail from here, so make
-  // this the obvious root-cause line in prod logs rather than a vague PDF error.
-  if (!rewritten.data) {
-    logger.error({ rewriteMs: timings.parallel_ms }, 'rewrite returned null data — resume cannot be generated this run');
+  // ─────── Stage B: Body rewrite (Pass 1) ───────
+  // Rewrites every section EXCEPT the summary. Consumes per-project
+  // readme_excerpt (persisted by router.js on the pending_project during the
+  // AWAITING_PROJECTS turn) for deeper bullet mining. Reorders skills by
+  // jdIntel.top_prioritized_skills. Timeout budget is generous — Meta webhook
+  // is async since 2026-06-22, so a 30s rewrite is fine end-to-end.
+  const tBody = Date.now();
+  const bodyRes = await withTimeout(
+    rewriteBody({
+      resumeJson: session.resume_json,
+      jdIntel,
+      jdRole: session.jd_role,
+      jdText: session.jd_text,
+      jdKeywords: jdIntel.keywords || [],
+      jdGeneric: session.jd_generic,
+      phoneFrom,
+    }),
+    60000,
+    { data: null, usage: null },
+    'rewrite_body'
+  );
+  timings.rewrite_body_ms = Date.now() - tBody;
+  if (!bodyRes.data) {
+    logger.error({ bodyMs: timings.rewrite_body_ms }, 'body rewrite returned null data — resume cannot be generated this run');
+    session.resume_json_rewritten = null;
+    timings.total_ms = Date.now() - t0;
+    logger.info({ timings }, 'generation complete (body failure)');
+    return session;
   }
 
-  // ATS score — deterministic, local, ~5-10ms. PRD §11.
-  if (session.resume_json_rewritten) {
-    const tAts = Date.now();
-    const scored = scoreResume(session.resume_json_rewritten, session.jd_keywords);
-    session.ats_score = scored.total;
-    session.ats_breakdown = scored;
-    session.ats_suggestions = suggestionsFor(scored);
-    timings.ats_ms = Date.now() - tAts;
+  // ─────── Stage C: Summary rewrite (Pass 2) ───────
+  // Takes the polished body + JD intel. Opens with the JD's role_noun.
+  // Failure here is graceful: keep the empty summary and log — the resume
+  // still delivers, just without a summary section.
+  const tSum = Date.now();
+  const sumRes = await withTimeout(
+    rewriteSummary({
+      body: bodyRes.data,
+      jdIntel,
+      jdText: session.jd_text,
+      jdRole: session.jd_role,
+      jdGeneric: session.jd_generic,
+      rawResume: session.resume_json,
+    }),
+    30000,
+    { data: { summary: '' }, usage: null },
+    'rewrite_summary'
+  );
+  timings.rewrite_summary_ms = Date.now() - tSum;
+  bodyRes.data.summary = (sumRes.data && sumRes.data.summary) || '';
+  session.resume_json_rewritten = bodyRes.data;
+  session.rewrite_usage = bodyRes.usage;
+  session.summary_usage = sumRes.usage;
+
+  // ─────── Stage D: Deterministic ATS scoring ───────
+  const tAts = Date.now();
+  const scored = scoreResume(session.resume_json_rewritten, session.jd_keywords);
+  session.ats_score = scored.total;
+  session.ats_breakdown = scored;
+  const deterministicSuggestions = suggestionsFor(scored);
+  timings.ats_ms = Date.now() - tAts;
+
+  // ─────── Stage E: LLM Reviewer agent ───────
+  // Contextual suggestions that the deterministic scorer can't produce
+  // (JD-specific missing keywords the student COULD honestly include, generic
+  // verbs, bullets thin on metrics). Runs in parallel to nothing — Stage D is
+  // synchronous and fast; Stage E is the last LLM call. Failure is graceful
+  // (fall back to deterministic suggestions).
+  const tRev = Date.now();
+  const review = await withTimeout(
+    reviewResume({
+      rewritten: session.resume_json_rewritten,
+      jdIntel,
+      rawResume: session.resume_json,
+    }),
+    20000,
+    { suggestions: [] },
+    'review'
+  );
+  timings.review_ms = Date.now() - tRev;
+  const llmSuggestions = Array.isArray(review.suggestions) ? review.suggestions : [];
+  // Merge: LLM suggestions first (more actionable), then deterministic ones the
+  // LLM didn't already cover. Cap at 5 total so preview stays scannable.
+  const seen = new Set(llmSuggestions.map((s) => String(s).toLowerCase().slice(0, 40)));
+  const merged = [...llmSuggestions];
+  for (const s of deterministicSuggestions) {
+    const k = String(s).toLowerCase().slice(0, 40);
+    if (!seen.has(k) && merged.length < 5) { merged.push(s); seen.add(k); }
   }
+  session.ats_suggestions = merged;
 
   timings.total_ms = Date.now() - t0;
-  logger.info({ timings, kwCount: session.jd_keywords.length, atsScore: session.ats_score }, 'generation complete');
+  logger.info({
+    timings,
+    kwCount: session.jd_keywords.length,
+    roleNoun: session.jd_role_noun,
+    atsScore: session.ats_score,
+    llmSuggestionCount: llmSuggestions.length,
+    projectsWithReadme: (session.resume_json.projects || []).filter((p) => p && p.readme_excerpt).length,
+  }, 'multi-agent generation complete');
   return session;
 }
 
