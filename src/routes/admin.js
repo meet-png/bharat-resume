@@ -11,6 +11,15 @@ router.get('/health', (_req, res) => {
   res.json({ ok: true, ts: new Date().toISOString() });
 });
 
+// Public root landing page (added 2026-07-14). Renders the business's
+// front door so payment-gateway reviewers, Meta reviewers, and curious
+// students who type the URL see a real, branded page instead of a 404.
+// Long cache — static file, changes rarely.
+router.get('/', (_req, res) => {
+  res.set('Cache-Control', 'public, max-age=3600');
+  res.sendFile(path.join(__dirname, '..', '..', 'public', 'index.html'));
+});
+
 router.get('/payment-success', (_req, res) => {
   res.sendFile(path.join(__dirname, '..', '..', 'public', 'payment-success.html'));
 });
