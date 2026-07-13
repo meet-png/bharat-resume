@@ -122,55 +122,61 @@ const PROMPTS = {
     ],
   },
 
-  // Experience prompt explicitly invites action+impact+tools — primes the LLM
-  // sufficiency check that runs in extract.js.
+  // Section-intro prompts (2026-07-13 restructure): each multi-fact section
+  // opens with a NUMBERED CHECKLIST of what to include, so students don't
+  // need 4-5 back-and-forth turns to reach sufficiency. Reduces confusion
+  // + shortens conversation. Meet's feedback after live-test: students were
+  // getting stuck because they didn't know WHAT the bot wanted.
   [STATES.AWAITING_EXPERIENCE]: [
-    "Koi internship ya job experience? Company, role, dates, kya kiya, aur impact kya tha (% improve / users / time saved) — ek saath. 'skip' if none.",
-    "Any internship/work experience? Drop company + role + dates + what you DID + the impact (numbers, results, deliverable). Or 'skip'.",
-    "Work experience? Company, role, duration, ek concrete action, aur outcome — sab batao. Type 'skip' if not.",
-    "Internships/jobs share kariye — kahaan, kya role, kya banaya/improve kiya, kya result mila. 'skip' agar nahi hai.",
+    "Koi internship / job? Ek message mein sab de do:\n1) Company + role\n2) Dates (May-Jul 2025)\n3) Kya kiya — 2-3 concrete actions\n4) Impact number: % improved / users / time saved / revenue\n\n'skip' if none.",
+    "Internship or work experience? In one message, share:\n1) Company + role\n2) Duration\n3) What you actually did — 2-3 concrete actions\n4) The IMPACT — a number, %, or a named outcome\n\nType 'skip' if none.",
+    "Work experience? Ek shot mein poori jankari:\n1) Company + role + dates\n2) 2-3 kaam jo kiye\n3) Ek metric ya outcome (number, %, result)\n\nBina metric ke bullets thin lagte hain. 'skip' agar nahi hai.",
+    "Any internship/job? Share these in one message:\n• Company + role\n• Dates\n• 2-3 things you built or improved\n• A number that shows the impact (users, %, time saved)\n\n'skip' for none.",
   ],
 
   // Role-aware. Technical roles get the GitHub-centric ask (we auto-enrich from
   // the repo); non-technical roles get a link-agnostic ask so a Marketing /
   // Sales / Finance candidate isn't told to paste a GitHub link.
+  //
+  // 2026-07-13: GitHub is now near-compulsory for technical roles — the
+  // extractor will ask twice before accepting a link decline. Reflected here.
   [STATES.AWAITING_PROJECTS]: {
     technical: [
-      "Projects share kariye — ek project per message. Name + GitHub link + 2-3 lines kya banaya. Multiple projects ho to ek-ek karke. 'done' jab sab bata den, 'skip' if none.",
-      "Tell me about your projects — one per message. Name, the GitHub link (or live URL), and a short description. Type 'done' when finished, 'skip' if none.",
-      "Koi projects? Har project alag message: name, GitHub link, brief description. 'done' for finish, 'skip' for none. GitHub link ho to bhej dena — main repo se details pick kar lunga.",
-      "Projects batao — one at a time. Include name + GitHub link + what it does. I'll pull tech stack and details from the repo. Type 'done' when complete, 'skip' if nothing.",
+      "Projects share kariye — ek per message, iss format mein:\n1) Project name\n2) GitHub link (compulsory — README se main tech, features, aur numbers khud nikaal lunga)\n3) 2-3 lines kya banaya / kis problem ke liye\n4) Koi metric — users, accuracy, stars, time saved\n\n'done' jab sab bata den, 'skip' if none.",
+      "Tell me about your projects — one per message:\n1) Project name\n2) GitHub URL (I mine the README so you don't have to describe every detail)\n3) A 2-3 line summary of what it does\n4) Any real number — users, accuracy %, stars, benchmark\n\n'done' when finished, 'skip' if none.",
+      "Projects — ek-ek karke bhejo, ye format follow karo:\n• Name\n• GitHub repo link (bahut zaroori — repo ke bina bullets aadhe rehte hain)\n• 2-3 lines: kya banaya, kis problem ke liye\n• Ek concrete number (users / accuracy / performance)\n\n'done' when complete, 'skip' if nothing.",
+      "Projects one per message. Include:\n1) Name\n2) GitHub link (I pull tech stack + features straight from the repo)\n3) 2-3 lines about what it does\n4) One quantifiable result — dataset size, accuracy, users, forecast horizon, stars\n\n'done' to finish, 'skip' if none.",
     ],
     general: [
-      "Projects ya major kaam share kariye — ek per message. Naam + 2-3 lines kya kiya/banaya. 'done' jab sab ho jaye, 'skip' if none.",
-      "Tell me about your projects or key work — one per message. Name + a short description of what you did. Type 'done' when finished, 'skip' if none.",
-      "Koi projects, campaigns ya initiatives? Har ek alag message: naam + brief description. 'done' for finish, 'skip' for none.",
-      "Projects ya key work batao — one at a time. Name + what it achieved. Agar kuch public hai (live site / article / deck) to link bhi bhej dena. 'done' when complete, 'skip' if nothing.",
+      "Projects ya major kaam share kariye — ek per message:\n1) Naam\n2) 2-3 lines kya kiya / banaya\n3) Ek concrete outcome (numbers agar hain)\n4) Koi live link / article / deck / portfolio URL\n\n'done' jab sab ho jaye, 'skip' if none.",
+      "Tell me about your projects or key work — one per message:\n1) Name\n2) A 2-3 line summary of what you did\n3) The concrete outcome (metric / result / deliverable)\n4) Any public link — article, campaign page, portfolio\n\n'done' when finished, 'skip' if none.",
+      "Projects / campaigns / initiatives — ek-ek alag message:\n• Naam\n• 2-3 lines context\n• Ek outcome (number / result)\n• Public link ho to bhej dena\n\n'done' for finish, 'skip' for none.",
+      "Key work — one per message. Include:\n1) Name\n2) 2-3 lines of what you did\n3) The measurable outcome\n4) A live link (site / article / deck) if public\n\n'done' when complete, 'skip' if nothing.",
     ],
   },
 
   // PoR step: jargon dropped, plain language used per Meet's feedback.
   [STATES.AWAITING_POR]: [
-    "Koi leadership ya responsibility role hai? Class representative, club head, event organizer, NSS/NCC — kuch aisa. 'skip' if none.",
-    "Any leadership role at college? — class rep, society head, event lead, NSS/NCC, etc. 'skip' for none.",
-    "Leadership ya responsibility hai kuch — class rep, club, society, event organizer, NSS/NCC? Drop it here ya 'skip'.",
-    "Held a leadership/responsibility role at college? Like class rep, club lead, society head, event organizer, NSS/NCC. 'skip' if not.",
+    "Koi leadership / responsibility role? Ek message mein poora:\n1) Role + club/society/committee\n2) Dates\n3) Scale — kitne log, kitna budget, kitne events\n4) Ek concrete outcome (sponsors, participants, revenue, zero-deficit type)\n\n'skip' if none.",
+    "Any leadership role at college? In one message, share:\n1) The role + which club / society / committee\n2) Duration\n3) SCALE — team size, delegate count, budget managed\n4) A concrete outcome — sponsors, events run, participant count\n\n'skip' for none.",
+    "Leadership / society role? Ek shot mein:\n• Role + organisation\n• Dates\n• Scale (team, delegates, budget)\n• Outcome (events, sponsors, revenue, participation)\n\n'skip' agar kuch nahi.",
+    "Held a leadership role — class rep, club head, event lead, NSS/NCC, MUN? Share in one message:\n1) Role + which club\n2) Dates\n3) Scale (team size / participants / budget)\n4) A concrete outcome or number\n\n'skip' if not.",
   ],
 
   // Certs: just name + link. No more issuer/date follow-ups (Day 4 template
   // renders as a clickable hyperlink — name as text, link as href).
   [STATES.AWAITING_CERTS]: [
-    "Certifications ya courses? Naam aur verification link bhejiye (NPTEL/Coursera/AWS/etc.). Multiple ho to ek-ek karke. 'skip' if none.",
-    "Any certifications? Share name + verification URL (Coursera / NPTEL / AWS / Udemy / etc.) — one per message if multiple. 'skip' for none.",
-    "Certifications/courses kiye hain? Drop name + link (verification URL). 'skip' if nothing comes to mind.",
-    "Share certifications — just the name and the link. I'll handle issuer + date from the URL. 'skip' if none.",
+    "Certifications / courses? Ek message mein:\n1) Cert name (jaise 'Google Data Analytics Professional')\n2) Verification URL (Coursera / NPTEL / AWS / Credly)\n\nMultiple ho to alag-alag messages mein, ek per message. 'skip' if none.",
+    "Any certifications? Format per message:\n1) Cert name\n2) Verification URL (Coursera / NPTEL / Credly / AWS / etc.)\n\nOne per message if multiple. 'skip' if none.",
+    "Certifications / online courses kiye hain?\n• Cert ka poora name\n• Verification link\n\nOne per message if multiple. 'skip' if nothing comes to mind.",
+    "Share certifications — one per message:\n1) Name\n2) Verification URL (or 'no link' if unavailable)\n\n'skip' if none.",
   ],
 
   [STATES.AWAITING_ACHIEVEMENTS]: [
-    "Last one — koi achievements, ranks, prizes? Ek-ek karke bhejiye. 'done' jab sab ho jaye, 'skip' if none.",
-    "Final section: any achievements, awards, or prizes? Share one at a time. Type 'done' when finished, 'skip' if nothing.",
-    "Awards/ranks/prizes? Ek-ek alag message mein. 'done' to finish, 'skip' if no achievements.",
-    "Notable achievements, competitions, or awards? Share one per message, 'done' when complete, 'skip' if none.",
+    "Last section — achievements / awards / ranks:\n1) Achievement name (e.g. 'AIR 3421 JEE Advanced 2023')\n2) One concrete number if possible (rank, percentile, prize amount)\n3) Year\n\nEk per message. 'done' jab sab bata den, 'skip' if none.",
+    "Final section — any achievements, awards, or prizes?\n1) Achievement or award\n2) A concrete detail — rank, percentile, prize, scale\n3) Year\n\nShare one per message. 'done' when finished, 'skip' if nothing.",
+    "Awards / ranks / hackathon wins?\n• Name\n• Rank ya percentile\n• Year\n\nEk-ek alag message mein. 'done' to finish, 'skip' if no achievements.",
+    "Notable achievements — competitions, olympiads, hackathons, scholarships?\n1) Name + year\n2) Rank / percentile / prize\n3) Scale (state / national / international / count of competitors)\n\nOne per message, 'done' when complete, 'skip' if none.",
   ],
 };
 

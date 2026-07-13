@@ -1,17 +1,36 @@
-// Targeted edit pass. PRD §7.3 / §5 Phase 4 (edit loop, Day 5.3).
-// Takes the ALREADY-rewritten resume JSON + one free-text change request and
-// returns the SAME schema with ONLY that change applied. Never invents facts,
-// never touches unrelated sections. On ambiguity or a request that would require
-// fabricating data, returns the resume unchanged + a short clarification.
+// Multi-agent edit pipeline. PRD §7.3 / §5 Phase 4, upgraded 2026-07-13.
+//
+// The old single-call edit silently DROPPED multi-line natural-language edits.
+// Live-test 2026-07-13: student typed
+//   "Add these certificates\n\nNeural Networks & Deep Learning\n\n
+//    Introduction to AI, Data Science & Ethics"
+// The bot returned "Updated ✓ 2 edits left" but the resume's certifications
+// stayed empty. Root cause: the single-call prompt treated "cert without URL"
+// as needing clarification, so the LLM emitted certifications:[] AND
+// clarification_needed:null — a silent-drop that consumes an edit while
+// applying nothing. Trust-critical.
+//
+// New shape:
+//   Stage 1 — classifyIntent (LLM): parses the free-text instruction into a
+//     structured intent {section, action, items_to_add, target_ref,
+//     new_value, clarification_needed}. Does NOT touch the resume yet.
+//   Stage 2 — applyIntent (deterministic OR LLM depending on action):
+//     • add          → deterministic append (respects schema; url optional)
+//     • remove       → deterministic filter by name / index / substring
+//     • rephrase     → LLM patch on the single targeted string
+//     • modify       → LLM patch on the single targeted entry
+//     • reorder      → LLM re-order within one array
+//     • replace_all  → LLM full-section rewrite (rare; skills reordering etc.)
+//   Stage 3 — validate + guard: sections not referenced by intent must
+//     round-trip byte-identical; anti-silent-drop check.
+//
+// Failure modes are OBVIOUS now:
+//   • Classifier can't parse intent → clarification_needed (Meet's rule)
+//   • Add produced no items → clarification (never a silent success)
+//   • LLM apply corrupted a guarded section → restored from pre-edit
 const { complete } = require('./client');
 const logger = require('../logger');
 
-// Sections we structurally guard: if the LLM drops/shrinks any of these for an
-// edit that didn't reference the section, we restore from the pre-edit value.
-// Surfaced by live-test 2026-06-24: adding an Experience caused the entire
-// Projects section to disappear from the rendered PDF (LLM moved projects into
-// experience and emitted projects:[]). Guard makes that class of failure
-// invisible to the student.
 const GUARDED_SECTIONS = [
   'summary', 'education', 'skills', 'experience', 'projects',
   'por', 'certifications', 'achievements', 'coding_profiles',
@@ -49,14 +68,9 @@ function instructionReferences(instruction, section) {
   return aliases.some((a) => i.includes(a));
 }
 
-// Two structural failures we've observed: (1) LLM emits a section as empty
-// when it shouldn't, (2) LLM duplicates an existing entry in projects (or
-// experience) with a thinner version. Dedup is case-insensitive on name; the
-// LONGER entry wins (more bullets / more tech_stack), under the assumption
-// that the LLM's "thinner duplicate" is the corruption, not the original.
 function dedupeByName(arr, label) {
   if (!Array.isArray(arr)) return arr;
-  const seen = new Map(); // key: lowercased trimmed name → index in `out`
+  const seen = new Map();
   const out = [];
   for (const item of arr) {
     if (!item || typeof item !== 'object') { out.push(item); continue; }
@@ -88,75 +102,356 @@ function jdLine({ jdRole, jdText, jdGeneric }) {
   return 'TARGET: generic resume.';
 }
 
-// Returns { data: <full resume schema> | null, clarification_needed: string | null, usage }.
+// ─────────────────────────────────────────────────────────────────────────
+// STAGE 1 — Intent classifier
+// Parses free-text edit into structured intent. Does NOT touch the resume.
+// Special handling for multi-item natural inputs (Meet's cert failure).
+// ─────────────────────────────────────────────────────────────────────────
+async function classifyIntent({ rewritten, instruction, jd }) {
+  const system = `You classify a resume edit request into a STRUCTURED INTENT. You are NOT rewriting the resume in this step — a separate stage will apply your intent to the JSON.
+
+${jdLine(jd)}
+
+CURRENT resume shape (for context — you can see what sections exist and their contents to disambiguate references):
+${JSON.stringify(rewritten)}
+
+The student's message (STUDENTS TYPE IN ANY STYLE — multi-line lists, terse phrases, Hinglish, English, informal. Parse robustly):
+"""${String(instruction)}"""
+
+Return JSON exactly:
+{
+  "section": "summary" | "education" | "skills" | "experience" | "projects" | "por" | "certifications" | "achievements" | "coding_profiles" | "contact" | "unknown",
+  "action":  "add" | "remove" | "modify" | "rephrase" | "reorder" | "replace_section" | "clarify",
+  "items_to_add":     [/* items to be added; SHAPE depends on section */] | null,
+  "target_reference": string | null,   /* how to find the item to remove/modify (name, index, substring, "first"/"last") */
+  "new_value":        string | null,   /* for contact-field or single-value changes: the new value the student wants */
+  "modify_instruction": string | null, /* for modify/rephrase: the natural-language change to apply to the target */
+  "clarification_needed": string | null /* only if intent is genuinely unclear */
+}
+
+FIELD GUIDANCE:
+
+- **section**:
+    • summary — anything about the top summary/profile/intro.
+    • education — degree, college, CGPA, coursework.
+    • skills — any programming languages, tools, frameworks.
+    • experience — internships, jobs, work history.
+    • projects — projects, portfolio work.
+    • por — leadership roles, clubs, societies, committees.
+    • certifications — courses, MOOCs, credentials.
+    • achievements — awards, ranks, hackathons.
+    • coding_profiles — LeetCode, Codeforces, HackerRank, GfG.
+    • contact — name / email / phone / linkedin / github URL.
+    • unknown — genuinely can't tell.
+
+- **action**:
+    • add — student wants to add a NEW item. items_to_add contains the parsed items.
+    • remove — student wants to delete something. target_reference identifies it.
+    • modify — student wants a specific existing entry changed. target_reference + modify_instruction.
+    • rephrase — reword a single bullet or the whole summary. target_reference (e.g. "2nd bullet in Razorpay") + modify_instruction.
+    • reorder — change ordering within an array. modify_instruction describes new order.
+    • replace_section — nuke and rewrite (rare; only use for skills reorganization requests).
+    • clarify — truly ambiguous. Set clarification_needed with ONE short Hinglish/English question.
+
+- **items_to_add** (only for action='add'; SHAPE varies by section):
+    • certifications → [{ "name": string, "url": string | null }]  (URL is OPTIONAL — do NOT clarify just because the URL wasn't given)
+    • achievements   → [string]
+    • skills         → [{ "category": string, "items": [string] }]  (or a flat list to be merged into an existing category)
+    • coding_profiles→ [{ "platform": string, "url": string | null, "stat": string | null }]
+    • projects       → [{ "name": string, "tech_stack": [string], "bullets": [string], "github_url"?: string, "demo_url"?: string }]  (rare via edit — usually needs full conversation)
+    • experience     → [{ "role": string, "company": string, "dates": string | null, "bullets": [string] }]  (rare via edit — usually needs sufficiency check)
+    • por            → [{ "role": string, "organization": string, "bullets": [string] }]
+    • education      → [{ "degree": string, "college": string, "branch": string | null, "cgpa": string | null }]
+    • summary/contact → n/a for 'add'; use action='replace_section' or 'modify'
+
+MULTI-ITEM PARSING (this is what broke Meet's test):
+When the student's message contains MULTIPLE items on separate lines / separated by commas / listed with hyphens or numbers, parse ALL of them into items_to_add. Example:
+
+  "Add these certificates
+   Neural Networks & Deep Learning
+   Introduction to AI, Data Science & Ethics"
+
+→ items_to_add: [
+    { "name": "Neural Networks & Deep Learning", "url": null },
+    { "name": "Introduction to AI, Data Science & Ethics", "url": null }
+  ]
+
+The URL being null is FINE. Do NOT set clarification_needed just because URLs are missing — certifications with name only are valid resume content.
+
+CLARIFY-ONLY GUARDRAIL:
+Set action='clarify' ONLY when the intent is genuinely ambiguous — e.g. "make it better", "improve this", "shorter please" without saying which section. When the instruction NAMES what to add and what section, parse it and set action='add'. Never punt to clarify because of missing optional fields.
+
+CONTACT CHANGES:
+For "change my email to X", "update phone number to Y", set section='contact', action='modify', and new_value=the new value.
+
+Return ONLY the JSON, no prose.`;
+
+  try {
+    const result = await complete({ system, user: 'classify the edit intent now', maxTokens: 900, temperature: 0.15 });
+    const data = result.data || {};
+    return {
+      section: data.section || 'unknown',
+      action: data.action || 'clarify',
+      items_to_add: Array.isArray(data.items_to_add) ? data.items_to_add : null,
+      target_reference: data.target_reference || null,
+      new_value: data.new_value || null,
+      modify_instruction: data.modify_instruction || null,
+      clarification_needed: data.clarification_needed || null,
+      usage: result.usage,
+    };
+  } catch (e) {
+    logger.warn({ err: e.message }, 'edit intent classification failed — falling back to clarify');
+    return {
+      section: 'unknown', action: 'clarify',
+      clarification_needed: 'Kya change karna hai? Ek line mein batao — jaise "add cert X", "shorten summary", "change email to Y".',
+    };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// STAGE 2 — Deterministic apply for simple actions.
+// Only handles the actions that are safely deterministic. LLM apply
+// (rephrase / modify / replace_section) is handled by applyWithLlm below.
+// Returns { applied, notes } — applied=false means we couldn't do it here.
+// ─────────────────────────────────────────────────────────────────────────
+function applyDeterministic(resume, intent) {
+  const { section, action, items_to_add, target_reference, new_value } = intent;
+
+  // Contact-field modifications.
+  if (section === 'contact' && action === 'modify' && new_value) {
+    const inst = (intent.modify_instruction || '').toLowerCase();
+    // Heuristic: identify which contact field the student meant.
+    if (/email|mail/.test(inst) || /@/.test(new_value)) {
+      resume.email = new_value.trim();
+      return { applied: true, notes: 'email updated' };
+    }
+    if (/phone|mobile|number/.test(inst)) {
+      resume.phone = new_value.trim();
+      return { applied: true, notes: 'phone updated' };
+    }
+    if (/linkedin/.test(inst) || /linkedin\.com/.test(new_value)) {
+      resume.linkedin = new_value.trim();
+      return { applied: true, notes: 'linkedin updated' };
+    }
+    if (/github/.test(inst) || /github\.com/.test(new_value)) {
+      resume.github = new_value.trim();
+      return { applied: true, notes: 'github updated' };
+    }
+    return { applied: false };
+  }
+
+  // Simple additions (certifications, achievements, coding_profiles).
+  if (action === 'add' && Array.isArray(items_to_add) && items_to_add.length > 0) {
+    if (section === 'certifications') {
+      if (!Array.isArray(resume.certifications)) resume.certifications = [];
+      // Normalize items → { name, url } shape.
+      for (const raw of items_to_add) {
+        const name = String((raw && raw.name) || raw).trim();
+        if (!name) continue;
+        const url = raw && raw.url ? String(raw.url).trim() : null;
+        // Skip exact duplicate names (case-insensitive).
+        if (resume.certifications.some((c) => String(c.name || '').trim().toLowerCase() === name.toLowerCase())) continue;
+        resume.certifications.push({ name, url });
+      }
+      return { applied: true, notes: `added ${items_to_add.length} certification(s)` };
+    }
+    if (section === 'achievements') {
+      if (!Array.isArray(resume.achievements)) resume.achievements = [];
+      for (const raw of items_to_add) {
+        const s = String((raw && raw.text) || raw).trim();
+        if (!s) continue;
+        if (resume.achievements.some((a) => String(a).trim().toLowerCase() === s.toLowerCase())) continue;
+        resume.achievements.push(s);
+      }
+      return { applied: true, notes: `added ${items_to_add.length} achievement(s)` };
+    }
+    if (section === 'coding_profiles') {
+      if (!Array.isArray(resume.coding_profiles)) resume.coding_profiles = [];
+      for (const raw of items_to_add) {
+        const platform = String((raw && raw.platform) || '').trim();
+        if (!platform) continue;
+        const url = raw && raw.url ? String(raw.url).trim() : null;
+        const stat = raw && raw.stat ? String(raw.stat).trim() : null;
+        if (resume.coding_profiles.some((c) => String(c.platform || '').trim().toLowerCase() === platform.toLowerCase())) continue;
+        resume.coding_profiles.push({ platform, url, stat });
+      }
+      return { applied: true, notes: `added ${items_to_add.length} coding profile(s)` };
+    }
+    if (section === 'skills') {
+      if (!Array.isArray(resume.skills)) resume.skills = [];
+      for (const raw of items_to_add) {
+        // Two shapes possible: { category, items:[...] } OR just a string list.
+        if (raw && raw.category && Array.isArray(raw.items)) {
+          const cat = resume.skills.find((c) => String(c.category || '').toLowerCase() === String(raw.category).toLowerCase());
+          if (cat) {
+            const existing = new Set(cat.items.map((s) => String(s).toLowerCase()));
+            for (const item of raw.items) if (!existing.has(String(item).toLowerCase())) cat.items.push(item);
+          } else {
+            resume.skills.push({ category: String(raw.category), items: raw.items.map(String) });
+          }
+        }
+      }
+      return { applied: true, notes: 'skills merged' };
+    }
+  }
+
+  // Simple removals by target reference.
+  if (action === 'remove' && target_reference && ['certifications', 'achievements', 'coding_profiles', 'projects', 'experience', 'por', 'education'].includes(section)) {
+    const ref = String(target_reference).toLowerCase();
+    const arr = resume[section];
+    if (!Array.isArray(arr)) return { applied: false };
+    const before = arr.length;
+    resume[section] = arr.filter((item) => {
+      if (typeof item === 'string') return !item.toLowerCase().includes(ref);
+      if (item && typeof item === 'object') {
+        const name = String(item.name || item.role || item.platform || item.college || '').toLowerCase();
+        return !name.includes(ref);
+      }
+      return true;
+    });
+    const removed = before - resume[section].length;
+    if (removed === 0) return { applied: false, notes: 'no matching item found' };
+    return { applied: true, notes: `removed ${removed} item(s) from ${section}` };
+  }
+
+  return { applied: false };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// STAGE 2b — LLM apply for the rephrase/modify/reorder/replace_section paths.
+// One LLM call, tightly scoped: give it the current resume + the specific
+// intent + explicit "touch only what's asked" rule. Post-guard restores any
+// unrelated section that got dropped.
+// ─────────────────────────────────────────────────────────────────────────
+async function applyWithLlm({ rewritten, instruction, intent, jd }) {
+  const system = `You edit an already-finalized resume JSON. Apply ONE targeted change from the classified intent and return the COMPLETE resume JSON in the exact same schema.
+
+${jdLine(jd)}
+
+CLASSIFIED INTENT (from Stage 1):
+${JSON.stringify(intent, null, 2)}
+
+RAW student instruction (for tone/context, but the intent above is authoritative):
+"""${String(instruction)}"""
+
+ABSOLUTE RULES:
+1. Apply ONLY the change described by the intent. Every other field must round-trip byte-identical.
+2. NEVER invent facts, metrics, companies, skills, or achievements. If the intent asks to modify something but the underlying detail requires information the student did not provide, return the resume UNCHANGED and set clarification_needed to a short one-line ask (Hinglish or English, Latin script).
+3. Preserve markdown \`**bold**\` markers on bullets you touch.
+4. PROJECT LINKS: github_url is a github.com repo; demo_url is a deployed URL (*.streamlit.app, *.vercel.app, custom domain, "live"/"demo" link). Route by kind; keep the other field.
+
+CURRENT resume JSON:
+${JSON.stringify(rewritten)}
+
+Return JSON only:
+{ "resume": <FULL resume JSON in the same schema>, "clarification_needed": string | null }`;
+
+  const result = await complete({ system, user: 'apply the change now', maxTokens: 2400, temperature: 0.2 });
+  const out = result.data || {};
+  return { resume: out.resume || null, clarification_needed: out.clarification_needed || null, usage: result.usage };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// STAGE 3 — Structural integrity guard.
+// If any guarded section was non-empty before, wasn't referenced by the
+// edit instruction, and got dropped/shrunk by the LLM, restore it. Also
+// dedupe projects/experience by case-insensitive name.
+// ─────────────────────────────────────────────────────────────────────────
+function integrityGuard(resume, rewritten, instruction) {
+  if (!resume) return resume;
+  for (const f of GUARDED_SECTIONS) {
+    const had = !isEmptyValue(rewritten[f]);
+    const has = !isEmptyValue(resume[f]);
+    const mentioned = instructionReferences(instruction, f);
+    if (had && !has && !mentioned) {
+      logger.warn({ field: f, instructionHead: String(instruction).slice(0, 80) }, 'edit dropped unrelated section — restoring from original');
+      resume[f] = rewritten[f];
+      continue;
+    }
+    if (Array.isArray(rewritten[f]) && Array.isArray(resume[f])
+        && resume[f].length < rewritten[f].length
+        && !mentioned) {
+      logger.warn({ field: f, oldLen: rewritten[f].length, newLen: resume[f].length, instructionHead: String(instruction).slice(0, 80) }, 'edit shrunk unrelated section — restoring from original');
+      resume[f] = rewritten[f];
+    }
+  }
+  if (Array.isArray(resume.projects))   resume.projects   = dedupeByName(resume.projects,   'projects');
+  if (Array.isArray(resume.experience)) resume.experience = dedupeByName(resume.experience, 'experience');
+  return resume;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// PUBLIC — the edit-loop callsite calls this.
+// ─────────────────────────────────────────────────────────────────────────
 async function applyEdit({ rewritten, instruction, jdRole, jdText, jdGeneric }) {
   if (!rewritten) throw new Error('applyEdit: rewritten resume required');
   if (!instruction || !String(instruction).trim()) {
     return { data: null, clarification_needed: 'Kya change karna hai? Ek line mein batao.', usage: null };
   }
+  const jd = { jdRole, jdText, jdGeneric };
 
-  const system = `You edit an already-finalized resume JSON for an Indian student. You are given the CURRENT resume JSON and ONE change request. Apply ONLY that change and return the COMPLETE resume JSON in the exact same schema.
+  // Stage 1: classify intent.
+  const intent = await classifyIntent({ rewritten, instruction, jd });
+  logger.info({
+    section: intent.section, action: intent.action,
+    itemsCount: intent.items_to_add ? intent.items_to_add.length : 0,
+    clar: !!intent.clarification_needed,
+  }, 'edit intent classified');
 
-${jdLine({ jdRole, jdText, jdGeneric })}
-
-ABSOLUTE RULES:
-1. NEVER invent facts, metrics, companies, skills, or achievements. If the change asks to ADD something the student gives no real detail for (e.g. "add a Google internship" with no specifics), do NOT fabricate — set clarification_needed asking for the concrete detail and return the resume UNCHANGED.
-2. Touch ONLY what the request asks for. Every other field must come back byte-for-byte identical. Do not re-write, re-order, or "improve" unrelated bullets/sections.
-3. Preserve formatting: bullets are plain strings that keep their \`**bold**\` markdown markers around metrics. Keep that convention on any bullet you add or modify.
-4. If the request is a genuine edit you can apply from given information (rephrase a bullet, fix a typo, change CGPA the student now states, remove a project, reorder skills, shorten the summary), apply it and set clarification_needed = null.
-5. If the request is ambiguous or you cannot tell what to change, return the resume unchanged + a one-line clarification.
-6. PROJECT LINKS: each project has two link fields — "github_url" (a github.com repo) and "demo_url" (a deployed/live URL: *.streamlit.app, *.vercel.app, *.netlify.app, a custom domain, or anything the student calls a "live"/"demo"/"deployed" link). When the student asks to add a link to a project, put it in the CORRECT field by its kind, and KEEP any existing link in the other field (adding a demo link must not erase the github link, and vice versa). Match the project by the name the student references.
-
-CURRENT resume JSON:
-${JSON.stringify(rewritten)}
-
-Return ONLY valid JSON in this shape (no prose, no markdown fences):
-{ "resume": <the FULL resume JSON in the same schema as above>, "clarification_needed": string | null }
-
-VOICE for clarification_needed: Hinglish or English, Latin script only, one short warm sentence (goes straight to WhatsApp).`;
-
-  const result = await complete({ system, user: String(instruction), maxTokens: 2400, temperature: 0.2 });
-  const out = result.data || {};
-  const clarification = out.clarification_needed || null;
-  const resume = clarification ? null : (out.resume || null);
-
-  // Defensive: preserve the contact phone from the prior version — an edit must
-  // never drop or alter it unless explicitly asked (and the student can't change
-  // their WhatsApp-derived number via chat anyway).
-  if (resume && rewritten.phone && !resume.phone) resume.phone = rewritten.phone;
-
-  // STRUCTURAL INTEGRITY GUARD (added 2026-06-24 after live-test "added one
-  // Experience → Projects section disappeared"). For every guarded section: if
-  // the original had content, the edit instruction did NOT reference that
-  // section, and the LLM output dropped or SHRUNK it, restore from original.
-  // Catches the class of failures where editing one section silently
-  // corrupts unrelated structure.
-  if (resume) {
-    for (const f of GUARDED_SECTIONS) {
-      const had = !isEmptyValue(rewritten[f]);
-      const has = !isEmptyValue(resume[f]);
-      const mentioned = instructionReferences(instruction, f);
-      if (had && !has && !mentioned) {
-        logger.warn({ field: f, instructionHead: String(instruction).slice(0, 80) }, 'edit dropped unrelated section — restoring from original');
-        resume[f] = rewritten[f];
-        continue;
-      }
-      // For array sections, also catch a SHRUNK array (LLM moved entries or
-      // lost them mid-edit). Strict: shrink without instruction reference = restore.
-      if (Array.isArray(rewritten[f]) && Array.isArray(resume[f])
-          && resume[f].length < rewritten[f].length
-          && !mentioned) {
-        logger.warn({ field: f, oldLen: rewritten[f].length, newLen: resume[f].length, instructionHead: String(instruction).slice(0, 80) }, 'edit shrunk unrelated section — restoring from original');
-        resume[f] = rewritten[f];
-      }
-    }
-    // Dedup duplicate entries in projects + experience (LLM occasionally
-    // emits a second thinner copy of an existing entry).
-    if (Array.isArray(resume.projects))   resume.projects   = dedupeByName(resume.projects,   'projects');
-    if (Array.isArray(resume.experience)) resume.experience = dedupeByName(resume.experience, 'experience');
+  if (intent.action === 'clarify' || intent.clarification_needed) {
+    return { data: null, clarification_needed: intent.clarification_needed || 'Kya change karna hai? Thoda specific batao.', usage: intent.usage };
   }
 
-  return { data: resume, clarification_needed: clarification, usage: result.usage };
+  // Stage 2: try deterministic apply first (safest for add/remove/contact).
+  const resume = JSON.parse(JSON.stringify(rewritten));
+  let usedLlmApply = false;
+  let applyUsage = null;
+  const det = applyDeterministic(resume, intent);
+  if (!det.applied) {
+    // Fall through to LLM apply for rephrase/modify/reorder/replace_section.
+    const llmRes = await applyWithLlm({ rewritten, instruction, intent, jd });
+    if (llmRes.clarification_needed) {
+      return { data: null, clarification_needed: llmRes.clarification_needed, usage: intent.usage };
+    }
+    if (!llmRes.resume) {
+      return { data: null, clarification_needed: 'Change apply nahi ho paya — dobara try karo ya rephrase kar do.', usage: intent.usage };
+    }
+    Object.assign(resume, llmRes.resume);
+    usedLlmApply = true;
+    applyUsage = llmRes.usage;
+  }
+
+  // Anti-silent-drop check: if action was 'add' and the target section didn't
+  // grow, treat as failure and ask for clarification. Meet's cert test was
+  // exactly this failure mode — "updated ✓" with no items actually added.
+  if (intent.action === 'add' && intent.section !== 'contact' && intent.section !== 'unknown') {
+    const before = Array.isArray(rewritten[intent.section]) ? rewritten[intent.section].length : 0;
+    const after  = Array.isArray(resume[intent.section]) ? resume[intent.section].length : 0;
+    if (after <= before) {
+      logger.warn({ section: intent.section, before, after, instructionHead: String(instruction).slice(0, 80) }, 'edit add produced no net items — asking for clarification');
+      return {
+        data: null,
+        clarification_needed: `Mujhe ${intent.section} add karne mein confusion hui. Batao — konsa item add karna hai? Ek line mein poora naam bhejo.`,
+        usage: intent.usage,
+      };
+    }
+  }
+
+  // Defensive: preserve phone from prior version.
+  if (resume && rewritten.phone && !resume.phone) resume.phone = rewritten.phone;
+
+  // Stage 3: integrity guard.
+  integrityGuard(resume, rewritten, instruction);
+
+  return {
+    data: resume,
+    clarification_needed: null,
+    usage: {
+      intent: intent.usage || null,
+      apply: applyUsage,
+      llmApplyUsed: usedLlmApply,
+    },
+  };
 }
 
-module.exports = { applyEdit };
+module.exports = { applyEdit, classifyIntent, applyDeterministic, applyWithLlm, integrityGuard };

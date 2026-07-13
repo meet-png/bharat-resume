@@ -268,10 +268,21 @@ CASE A — only (a) missing (message has no project content):
 CASE B — (a) present, (b) missing:
   Ask for tech / description. Example: "Kis tech / tool se banaya? Aur kya karta hai project?"
 
-CASE C — (a) and (b) present, github_url missing AND _link_declined NOT true:
+CASE C — (a) and (b) present, github_url missing:
   Ask ONLY for a link to the work. NEVER mention impact/accuracy/metric here.
-  For TECHNICAL roles (software, data, engineering — this is v1's only audience), the GitHub REPO link is the PRIMARY ask EVERY TIME, because we auto-pull the project's tech, features, and any real numbers straight from the repo so the student doesn't have to describe it all. Ask for github_url even if a demo/deployed URL is already present (a repo and a demo are different things and we enrich from the repo). Tell the student we'll do the work from their repo:
-    - Technical role: "GitHub repo ka link bhej dijiye — main repo se aapke project ki tech, features aur numbers khud nikaal lunga. Deployed/live URL ho to wo bhi. 'no link' agar repo private hai."
+  For TECHNICAL roles (software, data, engineering — this is v1's only audience), the GitHub REPO link is the PRIMARY ask EVERY TIME, because we auto-pull the project's tech, features, and any real numbers straight from the repo so the student doesn't have to describe it all. Ask for github_url even if a demo/deployed URL is already present (a repo and a demo are different things and we enrich from the repo).
+
+  ** DECLINE-HANDLING (2026-07-13 rule — GitHub near-compulsory):
+     Meet's diagnosis: most students write vaguely about their own projects, and the README is the single richest source of bullet material. So DO NOT accept a link decline on the first ask — many students will just tap "no link" out of habit and lose all that quality. ASK TWICE.
+
+     Look at pending_project._link_ask_count (0 by default, incremented on each decline):
+       • If _link_ask_count === 0 (fresh ask, first time asking for link):
+           "GitHub repo ka link bhej dijiye — main repo ke README se aapke project ki tech, features aur numbers khud nikaal lunga, aap ko sab describe nahi karna padega. Deployed/live URL bhi chalega. Agar repo genuinely private hai to 'no link' bhejo."
+       • If _link_ask_count === 1 (student already declined once — SECOND ask, softer):
+           "Sure? Repo public ho to bhi share kar do — bina README ke bullets 40% weaker aate hain. Koi bhi demo/deployed URL bhi chalega. Agar sach mein kuch nahi share kar sakte to 'no link' bhejo, main aage badh jaunga."
+
+     After the SECOND decline (i.e. student says "no link" while pending_project._link_ask_count is already 1), the router will set _link_declined=true and this becomes CASE D territory. Never ask for the link a third time — trust the student.
+
   Pick the artifact NATIVE to the role only for NON-technical roles (not in v1 scope, but kept for safety):
     - Marketing/Content: "Is kaam ka koi link hai — live campaign, published article, ya post? 'no link' agar nahi."
     - Design: "Portfolio / Behance / Dribbble ya live link? 'no link' agar private hai."
@@ -360,8 +371,15 @@ ROLE-NATIVE METRICS for CASE D — adapt to TARGET ROLE in JD context:
     merge: (rj, x) => {
       if (!rj.pending_project) rj.pending_project = {};
       const p = rj.pending_project;
-      // Persist link-decline flag across turns.
-      if (x.link_declined === true) p._link_declined = true;
+      // Ask-twice rule for link decline (2026-07-13, near-compulsory GitHub).
+      // First decline: increment counter, ask again. Second decline: set the
+      // flag so CASE D fires and we stop asking. This trades one extra turn
+      // for dramatically higher chance of getting a repo URL and mining the
+      // README for high-quality bullets.
+      if (x.link_declined === true) {
+        p._link_ask_count = (p._link_ask_count || 0) + 1;
+        if (p._link_ask_count >= 2) p._link_declined = true;
+      }
       if (!x.project) return;
       for (const k of ['name', 'dates', 'github_url', 'demo_url']) {
         if (x.project[k]) p[k] = x.project[k];

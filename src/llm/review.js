@@ -55,7 +55,10 @@ async function reviewResume({ rewritten, jdIntel, rawResume }) {
   }
   const flatSkillsList = [...flatSkills];
 
-  const system = `You are a senior recruiter reviewing a candidate's resume against a target JD. Your one job: produce 2-4 SHORT, CONCRETE improvements the candidate can apply through the bot's free-text edit loop. These will be shown to them as bullets under "To improve with your edits".
+  const system = `You are a senior recruiter reviewing a candidate's resume against a target JD. You produce TWO things:
+
+  (A) 2-4 SHORT, CONCRETE improvements the candidate can apply through the free-text edit loop. Shown as "To improve with your edits".
+  (B) 4-5 INTERVIEW HOT TOPICS specific to THIS candidate's resume + this JD. Shown as "Prep for interview".
 
 CRITICAL RULES:
 
@@ -85,22 +88,41 @@ ${JSON.stringify(summary, null, 2)}
 Skills the student explicitly listed (do NOT suggest anything outside these unless it's a universally-assumed skill for the role like Excel for a Data Analyst):
 ${flatSkillsList.join(', ') || '(none)'}
 
-Return JSON exactly:
-{ "suggestions": [string, 2-4 items] }
+═══════════════════════════════════════════════════
+PART B — INTERVIEW HOT TOPICS (new 2026-07-13)
+═══════════════════════════════════════════════════
+Produce 4-5 CONCRETE topics the recruiter or interviewer is likely to probe THIS specific candidate on, given THIS specific resume AND JD. Different resumes → different topics. Rules:
 
-Zero suggestions is ALSO valid if the resume genuinely leaves nothing to improve — return an empty array. Do not pad.`;
+  1. **Anchor to real content on the resume.** If the candidate has a SARIMAX forecasting project, "time-series forecasting: stationarity, ARIMA vs SARIMAX, MAPE tuning" is a hot topic. If they have a payment retry service, "idempotency, exactly-once semantics, exponential backoff design" is a hot topic. If they have MUN leadership, "stakeholder management under budget pressure" is a hot topic. Never generic ("data structures", "system design") — always tied to something the candidate ACTUALLY did.
+  2. **Weighted toward the JD's role and domain.** For a Data Analyst KPMG-consulting JD, prep is heavier on stakeholder communication + SQL + Excel + business framing; for a Backend Engineer JD, heavier on scale/latency/architecture; etc.
+  3. **Actionable prep angle in ONE line.** For each topic, phrase as "Topic name — the specific angle to prep." Example: "Time-series forecasting — walk through your SARIMAX choice, why not ARIMA/Prophet, and how you'd interpret a MAPE of 25%."
+  4. **Never invent capability.** If the candidate has NOT shown proficiency in a topic, don't include it. Do NOT tell them to "prep system design" if their resume shows no system-design work.
+  5. **Length:** 15-30 words per topic. Total 4-5 topics.
+
+═══════════════════════════════════════════════════
+
+Return JSON exactly:
+{
+  "suggestions":     [string, 2-4 items],
+  "interview_topics":[string, 4-5 items]
+}
+
+Zero suggestions is ALSO valid if the resume genuinely leaves nothing to improve — return an empty array for suggestions. But interview_topics should ALWAYS be populated (there is always SOMETHING an interviewer will probe on).`;
 
   try {
-    const result = await complete({ system, user: 'produce the 2-4 suggestions now', maxTokens: 600, temperature: 0.3 });
+    const result = await complete({ system, user: 'produce suggestions AND interview topics now', maxTokens: 900, temperature: 0.3 });
     const data = result.data || {};
     const suggestions = Array.isArray(data.suggestions)
       ? data.suggestions.slice(0, 4).map((s) => String(s).trim()).filter((s) => s.length > 8 && s.length < 300)
       : [];
-    logger.info({ count: suggestions.length }, 'ats reviewer produced suggestions');
-    return { suggestions, usage: result.usage };
+    const interview_topics = Array.isArray(data.interview_topics)
+      ? data.interview_topics.slice(0, 5).map((s) => String(s).trim()).filter((s) => s.length > 8 && s.length < 300)
+      : [];
+    logger.info({ suggestionCount: suggestions.length, topicCount: interview_topics.length }, 'reviewer produced suggestions + interview topics');
+    return { suggestions, interview_topics, usage: result.usage };
   } catch (e) {
-    logger.warn({ err: e.message }, 'ats reviewer failed — falling back to deterministic suggestions only');
-    return { suggestions: [] };
+    logger.warn({ err: e.message }, 'reviewer failed — falling back to deterministic suggestions only');
+    return { suggestions: [], interview_topics: [] };
   }
 }
 

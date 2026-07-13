@@ -151,11 +151,12 @@ async function runGeneration(session, phoneFrom) {
       rawResume: session.resume_json,
     }),
     20000,
-    { suggestions: [] },
+    { suggestions: [], interview_topics: [] },
     'review'
   );
   timings.review_ms = Date.now() - tRev;
   const llmSuggestions = Array.isArray(review.suggestions) ? review.suggestions : [];
+  session.interview_topics = Array.isArray(review.interview_topics) ? review.interview_topics : [];
   // Merge: LLM suggestions first (more actionable), then deterministic ones the
   // LLM didn't already cover. Cap at 5 total so preview stays scannable.
   const seen = new Set(llmSuggestions.map((s) => String(s).toLowerCase().slice(0, 40)));
@@ -275,6 +276,17 @@ function buildPreview(session) {
     for (const s of session.ats_suggestions) lines.push(`  • ${s}`);
   }
 
+  // Interview hot topics (2026-07-13) — Reviewer agent generates 4-5 topics
+  // tailored to THIS resume and the JD. Different resumes → different topics.
+  // Purpose: help students prep for the actual questions they're likely to
+  // face given what's on their resume + role. Not shown when the reviewer
+  // returned zero (network failure, etc.).
+  if (Array.isArray(session.interview_topics) && session.interview_topics.length > 0) {
+    lines.push('');
+    lines.push(`_Prep for interview — hot topics based on your resume + JD:_`);
+    for (const t of session.interview_topics) lines.push(`  • ${t}`);
+  }
+
   lines.push('');
   // Pilot/paid students already have the clean, ATS-parseable PDF — no
   // watermark, no ₹49 gate. Everyone else sees the conversion CTA.
@@ -291,9 +303,19 @@ function buildPreview(session) {
     lines.push(`💳 "pay" — ₹49 unlocks the clean PDF + 3 more edits.`);
   }
 
+  // Final safety caution (2026-07-13). Prompts the student to open the PDF
+  // and eyeball every fact before shipping to a recruiter. Prevents them
+  // from firing off an AI-generated resume with a typo or misattribution.
+  lines.push('');
+  lines.push(`⚠️ _Zaroor: PDF khol ke poora resume review kar lo bhejne se pehle — koi fact / metric / date galat lage to "edit" bolke fix karo._`);
+
   let out = lines.join('\n');
-  // Hard cap; should be well under this anyway now.
-  if (out.length > 900) out = out.slice(0, 880) + '\n…';
+  // Hard cap generous enough to fit ATS suggestions + interview topics +
+  // payment CTAs + double-check caution comfortably. WhatsApp text limit is
+  // 4096 chars — 1800 stays well within while respecting attention span.
+  // Was 900 (single-agent), bumped to 1800 (multi-agent with reviewer +
+  // interview topics + caution).
+  if (out.length > 1800) out = out.slice(0, 1780) + '\n…';
   return out;
 }
 
