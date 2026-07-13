@@ -293,6 +293,71 @@ function applyDeterministic(resume, intent) {
       }
       return { applied: true, notes: 'skills merged' };
     }
+    if (section === 'experience') {
+      if (!Array.isArray(resume.experience)) resume.experience = [];
+      for (const raw of items_to_add) {
+        if (!raw || !raw.role || !raw.company) continue;
+        // Dedup by role+company case-insensitive.
+        const key = (String(raw.role) + '@' + String(raw.company)).toLowerCase();
+        if (resume.experience.some((e) => (String(e.role || '') + '@' + String(e.company || '')).toLowerCase() === key)) continue;
+        resume.experience.push({
+          role: String(raw.role),
+          company: String(raw.company),
+          location: raw.location || null,
+          dates: raw.dates || null,
+          tech_stack: Array.isArray(raw.tech_stack) ? raw.tech_stack : [],
+          bullets: Array.isArray(raw.bullets) ? raw.bullets.map(String) : [],
+        });
+      }
+      return { applied: true, notes: `added ${items_to_add.length} experience entry(ies)` };
+    }
+    if (section === 'por') {
+      if (!Array.isArray(resume.por)) resume.por = [];
+      for (const raw of items_to_add) {
+        if (!raw || !raw.role || !raw.organization) continue;
+        const key = (String(raw.role) + '@' + String(raw.organization)).toLowerCase();
+        if (resume.por.some((p) => (String(p.role || '') + '@' + String(p.organization || '')).toLowerCase() === key)) continue;
+        resume.por.push({
+          role: String(raw.role),
+          organization: String(raw.organization),
+          dates: raw.dates || null,
+          bullets: Array.isArray(raw.bullets) ? raw.bullets.map(String) : [],
+        });
+      }
+      return { applied: true, notes: `added ${items_to_add.length} PoR entry(ies)` };
+    }
+  }
+
+  // Deterministic skills reorder: parse "move X above Y" / "put X first" from
+  // the modify_instruction. Handles the common cases without an LLM roundtrip.
+  if (action === 'reorder' && section === 'skills' && Array.isArray(resume.skills) && intent.modify_instruction) {
+    const inst = String(intent.modify_instruction).toLowerCase();
+    // Pattern: "move X above Y" or "move X before Y" or "put X above Y"
+    const mMove = inst.match(/(?:move|put)\s+["']?([^"']+?)["']?\s+(?:above|before|over|on\s+top\s+of)\s+["']?([^"']+?)["']?(?:$|\s)/i);
+    if (mMove) {
+      const target = mMove[1].trim().toLowerCase();
+      const anchor = mMove[2].trim().toLowerCase();
+      const targetIdx = resume.skills.findIndex((c) => String(c.category || '').toLowerCase().includes(target));
+      const anchorIdx = resume.skills.findIndex((c) => String(c.category || '').toLowerCase().includes(anchor));
+      if (targetIdx >= 0 && anchorIdx >= 0 && targetIdx !== anchorIdx) {
+        const [item] = resume.skills.splice(targetIdx, 1);
+        const insertAt = targetIdx < anchorIdx ? anchorIdx - 1 : anchorIdx;
+        resume.skills.splice(insertAt, 0, item);
+        return { applied: true, notes: `reordered skills: ${mMove[1]} moved above ${mMove[2]}` };
+      }
+    }
+    // Pattern: "put X first" / "move X to top"
+    const mFirst = inst.match(/(?:put|move|make)\s+["']?([^"']+?)["']?\s+(?:first|to\s+(?:the\s+)?top|at\s+(?:the\s+)?top)/i);
+    if (mFirst) {
+      const target = mFirst[1].trim().toLowerCase();
+      const targetIdx = resume.skills.findIndex((c) => String(c.category || '').toLowerCase().includes(target));
+      if (targetIdx > 0) {
+        const [item] = resume.skills.splice(targetIdx, 1);
+        resume.skills.unshift(item);
+        return { applied: true, notes: `reordered skills: ${mFirst[1]} moved to top` };
+      }
+    }
+    // Fall through to LLM if regex didn't match.
   }
 
   // Simple removals by target reference.
@@ -346,8 +411,17 @@ ${JSON.stringify(rewritten)}
 Return JSON only:
 { "resume": <FULL resume JSON in the same schema>, "clarification_needed": string | null }`;
 
-  const result = await complete({ system, user: 'apply the change now', maxTokens: 2400, temperature: 0.2 });
-  const out = result.data || {};
+  // One retry on empty resume — the apply LLM occasionally returns
+  // {resume: null, clarification_needed: null} for reorder / rephrase
+  // intents at temperature 0.2 (~1 in 3 during local flake). Retry once at
+  // lower temperature almost always succeeds.
+  let result = await complete({ system, user: 'apply the change now', maxTokens: 2400, temperature: 0.15 });
+  let out = result.data || {};
+  if (!out.resume && !out.clarification_needed) {
+    logger.warn({ intentSection: intent.section, intentAction: intent.action }, 'LLM apply returned empty; retrying at lower temperature');
+    result = await complete({ system, user: 'apply the change now (retry — return the FULL resume JSON with the change applied)', maxTokens: 2400, temperature: 0.05 });
+    out = result.data || {};
+  }
   return { resume: out.resume || null, clarification_needed: out.clarification_needed || null, usage: result.usage };
 }
 
