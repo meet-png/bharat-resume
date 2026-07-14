@@ -246,13 +246,6 @@ function buildPreview(session) {
   if (r.name) lines.push(`_For: ${r.name}_`);
   lines.push('');
 
-  // ATS score itself is NOT shown to the student (Meet's call 2026-06-26 —
-  // students fixate on the number instead of using their edits to improve the
-  // content). The score still lives on session.ats_score for bot awareness
-  // (admin dashboard, telemetry, rewriter calibration) — just not surfaced
-  // here. The improvement suggestions ARE shown so students know what to do
-  // with their edit budget.
-
   // Matched-skill COUNT (not full list). 3-token tease is enough signal
   // without giving a usable skill section. ONLY shown when a REAL JD exists —
   // pasted JD text or a scraped JD URL (both land in session.jd_text). A bare
@@ -264,66 +257,56 @@ function buildPreview(session) {
   if (hasRealJd && matched.length > 0 && jdN > 0) {
     const tease = matched.slice(0, 3).join(', ') + (matched.length > 3 ? ', …' : '');
     lines.push(`*JD match:* ${matched.length}/${jdN} keywords (${tease})`);
-  }
-
-  // Improvement suggestions — always shown when the scorer surfaces any.
-  // Drives use of the 3 free edits. No <60 gate any more (the score itself
-  // is hidden, so gating on it would silently turn the help off and on for
-  // identical-looking students).
-  if (Array.isArray(session.ats_suggestions) && session.ats_suggestions.length > 0) {
     lines.push('');
-    lines.push(`_To improve with your edits:_`);
-    for (const s of session.ats_suggestions) lines.push(`  • ${s}`);
   }
 
-  // Interview hot topics (2026-07-13) — Reviewer agent generates 4-5 topics
-  // tailored to THIS resume and the JD. Different resumes → different topics.
-  // Purpose: help students prep for the actual questions they're likely to
-  // face given what's on their resume + role. Not shown when the reviewer
-  // returned zero (network failure, etc.).
-  if (Array.isArray(session.interview_topics) && session.interview_topics.length > 0) {
-    lines.push('');
-    lines.push(`_Prep for interview — hot topics based on your resume + JD:_`);
-    for (const t of session.interview_topics) lines.push(`  • ${t}`);
-  }
-
-  lines.push('');
   // Pilot/paid students already have the clean, ATS-parseable PDF — no
   // watermark, no ₹49 gate. Everyone else sees the conversion CTA.
+  // Design call 2026-07-15: FREE preview stays compact + conversion-focused.
+  // Coaching (improvement suggestions + interview topics) + rating micro-survey
+  // fire ONLY when the student is unlocked. Paid users get them via PAID_MESSAGE
+  // (src/payment/fulfill.js). Pilot users (PILOT_MODE=true) get them here.
   const isUnlocked = !!session.paid || !!session.pilot;
   if (isUnlocked) {
     lines.push(`✅ Clean, ATS-parseable PDF — ready to send to recruiters.`);
     lines.push('');
+    if (Array.isArray(session.ats_suggestions) && session.ats_suggestions.length > 0) {
+      lines.push(`💡 _To sharpen it further:_`);
+      for (const s of session.ats_suggestions) lines.push(`  • ${s}`);
+      lines.push('');
+    }
+    if (Array.isArray(session.interview_topics) && session.interview_topics.length > 0) {
+      lines.push(`🎯 _Interview prep — hot topics based on your resume + JD:_`);
+      for (const t of session.interview_topics) lines.push(`  • ${t}`);
+      lines.push('');
+    }
     lines.push(`✏️ "edit" to refine — 3 edits included.`);
+    if (!session.rating) {
+      lines.push('');
+      lines.push(`⭐ _Reply 1-5 to rate this resume — 30 seconds, helps us improve fast._`);
+    }
   } else {
     lines.push(`⚠️  Watermarked + ATS-unreadable (ATS can't parse images).`);
     lines.push(`₹49 unlock = clean text-parseable PDF that Naukri reads.`);
     lines.push('');
-    lines.push(`✏️ "edit" to refine — 3 free edits included.`);
-    lines.push(`💳 "pay" — ₹49 unlocks the clean PDF + 3 more edits.`);
-  }
-
-  // Final safety caution (2026-07-13). Prompts the student to open the PDF
-  // and eyeball every fact before shipping to a recruiter. Prevents them
-  // from firing off an AI-generated resume with a typo or misattribution.
-  lines.push('');
-  lines.push(`⚠️ _Zaroor: PDF khol ke poora resume review kar lo bhejne se pehle — koi fact / metric / date galat lage to "edit" bolke fix karo._`);
-
-  // Post-PDF rating micro-survey (2026-07-14). Only shown when the student
-  // hasn't rated yet — after they rate, we don't re-prompt so the preview
-  // doesn't feel naggy on subsequent messages. Rating is captured by the
-  // DELIVERED / PAID_COMPLETE handler's RATE_RE match (a bare digit 1-5).
-  if (!session.rating) {
+    // Payment link is created eagerly in tryGenerate (router.js) so the student
+    // sees it right in the preview — one fewer round-trip than "type pay to get
+    // the link". If link creation failed, we degrade to the older "type pay"
+    // CTA. Design call 2026-07-15.
+    if (session.payment_link_url) {
+      lines.push(`💳 Pay ₹49 here 👇`);
+      lines.push(session.payment_link_url);
+      lines.push('');
+      lines.push(`✏️ Or "edit" to refine — 3 free edits included.`);
+    } else {
+      lines.push(`💳 "pay" — ₹49 unlocks the clean PDF + 3 more edits.`);
+      lines.push(`✏️ "edit" to refine — 3 free edits included.`);
+    }
     lines.push('');
-    lines.push(`⭐ _Reply 1-5 to rate this resume — 30 seconds, helps us improve fast._`);
+    lines.push(`⚠️ _Zaroor: PDF khol ke poora resume review kar lo bhejne se pehle — koi fact / metric / date galat lage to "edit" bolke fix karo._`);
   }
 
   let out = lines.join('\n');
-  // Hard cap generous enough to fit ATS suggestions + interview topics +
-  // payment CTAs + double-check caution comfortably. WhatsApp text limit is
-  // 4096 chars — 1800 stays well within while respecting attention span.
-  // Was 900 (single-agent), bumped to 1800 (multi-agent with reviewer +
-  // interview topics + caution).
   if (out.length > 1800) out = out.slice(0, 1780) + '\n…';
   return out;
 }

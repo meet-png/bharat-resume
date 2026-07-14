@@ -9,7 +9,45 @@ const { STATES } = require('../state/states');
 const { logEvent } = require('../telemetry/events');
 const logger = require('../logger');
 
-const PAID_MESSAGE = 'Payment received ✓ Yeh raha aapka clean, ATS-readable resume — ab Naukri/LinkedIn sab isse properly parse karenge. Koi change chahiye? Type "edit" — aapke paas 3 edits hain. All the best! 🎉';
+// Post-payment delivery is two outbound messages (design call 2026-07-15):
+//   Msg 1 — clean PDF (media) + acknowledgement + coaching (improvement
+//           suggestions + interview topics from the Reviewer agent).
+//   Msg 2 — a separate lightweight caution + rating micro-survey.
+// Splitting keeps each message scannable; the coaching stays anchored to the
+// PDF, and the rating ask lands as its own beat so it doesn't get lost in a
+// wall of text.
+function buildPaidCoachingMessage(session) {
+  const lines = [];
+  lines.push(`Payment received ✓ Yeh raha aapka clean, ATS-readable resume — Naukri/LinkedIn ab isse properly parse karenge. 🎉`);
+
+  const suggestions = Array.isArray(session.ats_suggestions) ? session.ats_suggestions : [];
+  const topics = Array.isArray(session.interview_topics) ? session.interview_topics : [];
+
+  if (suggestions.length > 0) {
+    lines.push('');
+    lines.push(`💡 _To sharpen it further:_`);
+    for (const s of suggestions) lines.push(`  • ${s}`);
+  }
+  if (topics.length > 0) {
+    lines.push('');
+    lines.push(`🎯 _Interview prep — hot topics based on your resume + JD:_`);
+    for (const t of topics) lines.push(`  • ${t}`);
+  }
+
+  lines.push('');
+  lines.push(`✏️ "edit" — aapke paas 3 edits hain.`);
+  return lines.join('\n');
+}
+
+function buildCautionRatingMessage(session) {
+  const lines = [];
+  lines.push(`⚠️ _Zaroor: PDF khol ke poora resume review kar lo bhejne se pehle — koi fact / metric / date galat lage to "edit" bolke fix karo._`);
+  if (!session.rating) {
+    lines.push('');
+    lines.push(`⭐ _Reply 1-5 to rate this resume — 30 seconds, helps us improve fast._`);
+  }
+  return lines.join('\n');
+}
 
 // Returns { ok, ... } for terminal cases that a retry can't help (missing
 // hash/paymentId, expired session, no delivery address) — these are acked so
@@ -77,7 +115,19 @@ async function fulfillPayment({ phoneHash, paymentId, linkId }, deps = {}) {
     if (!delivery || !delivery.signedUrl) {
       throw new Error('clean PDF generation failed post-payment');
     }
-    await send({ to: session.phone_from, body: PAID_MESSAGE, mediaUrl: delivery.signedUrl });
+    // Msg 1 — clean PDF + coaching. This is the primary delivery: the message
+    // that must succeed to consider the payment "delivered". A throw here
+    // releases the dedupe lock and Razorpay retries.
+    await send({ to: session.phone_from, body: buildPaidCoachingMessage(session), mediaUrl: delivery.signedUrl });
+
+    // Msg 2 — separate caution + rating. Wrapped in its own try so a failure
+    // here doesn't trigger a webhook retry (the PDF + coaching already landed;
+    // re-sending would double-deliver the PDF). Best-effort follow-up.
+    try {
+      await send({ to: session.phone_from, body: buildCautionRatingMessage(session) });
+    } catch (e) {
+      logger.warn({ err: e.message, phoneHash: String(phoneHash).slice(0, 12), paymentId }, 'caution+rating follow-up failed (non-fatal)');
+    }
 
     // Delivered — only now mark the conversation complete.
     session.state = STATES.PAID_COMPLETE;

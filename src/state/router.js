@@ -103,6 +103,43 @@ function newSession() {
   };
 }
 
+// Creates a ₹49 payment link and stores the URL on the session. Does NOT
+// change state — caller decides whether to advance to AWAITING_PAYMENT.
+// Idempotent: if `session.payment_link_url` is already set, no-ops. Returns
+// true on success (link ready), false on failure. Failure is soft: caller
+// falls back to a "type pay" CTA so the flow doesn't dead-end.
+async function ensurePaymentLink(session, phoneHash) {
+  if (session.payment_link_url) return true;
+  try {
+    const link = await createPaymentLink({
+      phoneHash,
+      phone: session.phone_from,
+      name: session.resume_json && session.resume_json.name,
+      email: session.resume_json && session.resume_json.email,
+    });
+    session.payment_link_id = link.id;
+    // Legacy field name kept while old sessions age out (24h TTL). Safe to
+    // remove after the Cashfree cutover has been live > 24h.
+    session.razorpay_payment_link_id = link.id;
+    session.payment_link_url = link.short_url;
+    logEvent({ phoneHash, eventName: 'payment_link_created', state: session.state, payload: { amount: 49 } });
+    return true;
+  } catch (e) {
+    logger.error(
+      {
+        err: e.message,
+        statusCode: e.statusCode,
+        rzpCode: e.error && e.error.code,
+        rzpDesc: e.error && e.error.description,
+        cfCode: e.cfCode,
+        cfDesc: e.cfDesc,
+      },
+      'createPaymentLink failed',
+    );
+    return false;
+  }
+}
+
 // Returns reply for the GENERATING transition. Runs rewrite + PDF delivery
 // inline. Caller is responsible for persisting the session afterwards.
 // Reply is { text, media } when PDF was delivered, else string.
@@ -120,6 +157,13 @@ async function tryGenerate(session, phoneFrom, phoneHash) {
       logger.error({ phoneHash: String(phoneHash).slice(0, 12) }, 'pdf delivery failed; holding in GENERATING for retry');
       return pickMessage('pdfDeliveryFailed');
     }
+    // Eagerly create the payment link for non-unlocked students so the preview
+    // includes a pay-now CTA instead of forcing a "type pay" round-trip.
+    // Design call 2026-07-15. Soft failure — buildPreview degrades gracefully
+    // if the link couldn't be created.
+    if (!unlocked(session)) {
+      await ensurePaymentLink(session, phoneHash);
+    }
     session.state = STATES.DELIVERED;
     logEvent({ phoneHash, eventName: 'resume_delivered', state: STATES.DELIVERED, payload: { ats_score: session.ats_score } });
     return { text: buildPreview(session), media: delivery.signedUrl };
@@ -130,45 +174,13 @@ async function tryGenerate(session, phoneFrom, phoneHash) {
 }
 
 // Creates (or re-sends) the ₹49 payment link and moves to AWAITING_PAYMENT.
-// Provider selected by config.PAYMENT_PROVIDER — Razorpay ignores extra
-// customer_details; Cashfree requires them, so we pass phone/name/email either way.
+// Called on explicit 'pay' — the eager creation in tryGenerate usually means
+// the link is already on the session; this just switches state so nudges work.
 async function startPayment(session, phoneHash) {
-  if (session.payment_link_url) {
-    session.state = STATES.AWAITING_PAYMENT;
-    return pickMessage('paymentLink', { url: session.payment_link_url });
-  }
-  try {
-    const link = await createPaymentLink({
-      phoneHash,
-      phone: session.phone_from,
-      name: session.resume_json && session.resume_json.name,
-      email: session.resume_json && session.resume_json.email,
-    });
-    session.payment_link_id = link.id;
-    // Legacy field name kept while old sessions age out (24h TTL). Safe to
-    // remove after the Cashfree cutover has been live > 24h.
-    session.razorpay_payment_link_id = link.id;
-    session.payment_link_url = link.short_url;
-    session.state = STATES.AWAITING_PAYMENT;
-    logEvent({ phoneHash, eventName: 'payment_link_created', state: STATES.AWAITING_PAYMENT, payload: { amount: 49 } });
-    return pickMessage('paymentLink', { url: link.short_url });
-  } catch (e) {
-    // Provider errors carry different shapes. Razorpay: e.error.{code,description}.
-    // Cashfree: e.statusCode + e.cfCode + e.cfDesc. Log both so prod issues are
-    // diagnosable regardless of active provider.
-    logger.error(
-      {
-        err: e.message,
-        statusCode: e.statusCode,
-        rzpCode: e.error && e.error.code,
-        rzpDesc: e.error && e.error.description,
-        cfCode: e.cfCode,
-        cfDesc: e.cfDesc,
-      },
-      'createPaymentLink failed',
-    );
-    return pickMessage('paymentLinkFailed');
-  }
+  const ok = await ensurePaymentLink(session, phoneHash);
+  if (!ok) return pickMessage('paymentLinkFailed');
+  session.state = STATES.AWAITING_PAYMENT;
+  return pickMessage('paymentLink', { url: session.payment_link_url });
 }
 
 // Re-runs the deterministic ATS scorer after the rewritten resume changes, so
@@ -496,9 +508,27 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
     return ack + pickPrompt(session.state, session);
   }
 
-  // --- AWAITING_POR: pending_por accumulator (similar to projects). ---
-  // Multi-bullet, multi-angle sufficiency check; commits pending to por[] when sufficient.
+  // --- AWAITING_POR: multi-entry with pending_por accumulator + "more or done?" loop. ---
+  // Mirrors experience/certs/projects (2026-07-15 — PoR was the last multi-entry-
+  // shaped section still single-entry). Per-entry: gather → sufficiency check →
+  // commit pending_por into por[] → set por_more_pending → "N saved ✓ — agla?" →
+  // done/skip/decline advances; anything else starts a fresh pending_por entry.
   if (current === STATES.AWAITING_POR) {
+    // (a) "Add another or 'done'?" pending — DONE/SKIP/decline advances; any
+    //     other text starts a new pending_por entry (falls through to extract).
+    if (session.por_more_pending) {
+      if (DONE_RE.test(trimmed) || SKIP_RE.test(trimmed) || NO_MORE_HINT.test(trimmed)) {
+        session.por_more_pending = false;
+        session.state = NEXT_STATE[current];
+        const genReply = await tryGenerate(session, phoneFrom, phoneHash);
+        await setSession(phoneHash, session);
+        return genReply || pickPrompt(session.state, session);
+      }
+      session.por_more_pending = false;
+      // Fall through to extraction below with a fresh pending_por.
+    }
+
+    // (b) Empty-slot skip (never got any content) — advance without commit.
     if (SKIP_RE.test(trimmed) || NO_MORE_HINT.test(trimmed)) {
       const pending = session.resume_json.pending_por;
       if (pending && (pending.role || pending.organization) && (pending.bullets || []).length > 0) {
@@ -511,6 +541,7 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
       await setSession(phoneHash, session);
       return (await tryGenerate(session, phoneFrom, phoneHash)) || pickPrompt(session.state, session);
     }
+
     try {
       const { data, usage } = await extractSection({ state: current, body: trimmed, resumeJson: session.resume_json, session });
       logger.info({ phoneHash: phoneShort, state: current, usage }, 'extracted');
@@ -526,15 +557,24 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
           fallback: data.clarification_needed,
         });
       }
-      // Sufficient — commit pending_por to por[] and advance.
+      // Sufficient — commit pending_por to por[] and enter the "add another?" loop.
       const pending = session.resume_json.pending_por;
       if (pending && (pending.role || pending.organization)) {
         session.resume_json.por = (session.resume_json.por || []).concat([pending]);
       }
       session.resume_json.pending_por = null;
-      session.state = NEXT_STATE[current];
+      session.por_more_pending = true;
       await setSession(phoneHash, session);
-      return (await tryGenerate(session, phoneFrom, phoneHash)) || pickPrompt(session.state, session);
+      const n = (session.resume_json.por || []).length;
+      const loopFallback = `Leadership role #${n} saved ✓ — agla leadership role bhejo (ek message mein), ya 'done' likho.`;
+      return await composeReply({
+        session,
+        prev_state: current,
+        decision: 'loop_more',
+        student_last: trimmed,
+        missing: [],
+        fallback: loopFallback,
+      });
     } catch (e) {
       // A throw here is a BACKEND failure (LLM call errored or returned
       // unparseable JSON), never a "bad user input" — that path returns the
