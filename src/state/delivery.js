@@ -60,7 +60,10 @@ async function deliverPdf(session, phoneHash, opts = {}) {
       }
       let pdf = await htmlToPdf(html);
       if (!opts.clean) {
-        pdf = await watermarkPdf(pdf);
+        // Pass the recipient's WhatsApp phone (session.phone_from) so the
+        // watermark bakes the last-5 digits into the grid for accountability.
+        // Falls back to a generic "DO NOT SHARE" line if phone is missing.
+        pdf = await watermarkPdf(pdf, { phone: session && session.phone_from });
       }
       const path = objectPathFor(phoneHash, opts);
       const url = await uploadAndSign(path, pdf);
