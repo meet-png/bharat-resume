@@ -303,6 +303,53 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 
 **What's actually left before launch:** real end-to-end dry run on Railway (Meta → Railway → bot → PDF) with at least one real WhatsApp conversation — the fixes pushed today need a live confirmation that PDF generation now succeeds on a fresh persona. Then 2-3 friendly JECRC students before broadcasting to 100.
 
+### Session — 2026-07-16 (Meta activation LIVE · elaboration mandate · load test Phase A · RENDER_CONCURRENCY tuning, Claude Opus 4.7)
+
+Second session on the same overnight arc. One commit pushed: `27c6818` (elaboration mandate + AI-mistake disclaimer). Meta activation closed out end-to-end — new dedicated Indian phone number registered, new "Bharat Resume" WABA created, webhook subscribed, payment method added, system-user token asset-scoped. Load test tool built and run (Phase A only, mocked LLM); `RENDER_CONCURRENCY` tuned from 2 → 4 based on measured p95 improvement.
+
+**Business / infrastructure milestones — Meta LIVE on production number:**
+- **App published** — 5-recipient cap removed. Requirements checklist all green (BV verified same-day 2026-07-13, use cases green, no additional review needed for basic messaging on own WABA).
+- **New dedicated phone number registered** — `+91 91163 94657`, display name "Bharat Resume", Category "Education", timezone Asia/Kolkata. Meta auto-created a new WABA "Bharat Resume" for this number (separate from the "Test WhatsApp Business Account" that came with the app). Phone Number ID `1213931418470162`; new WABA ID `1001892455948101`.
+- **Webhook subscribed on new WABA** — the app-level callback URL (`bharat-resume-production.up.railway.app/webhook/whatsapp`) was already configured; subscribing the new WABA under it required the "Subscribe webhooks" toggle in App Dashboard → WhatsApp → Configuration.
+- **System user asset scope extended** — `bharat-resumebot` system user got Full access to the new "Bharat Resume" WABA (was scoped only to the Test WABA at generation time). Meta's dynamic-scope tokens auto-inherited access after the asset was added — no token regeneration needed.
+- **Payment method on new WABA** — Meta bills per-WABA. Existing card was scoped to Test WABA; added the same card to Bharat Resume WABA. ₹3 verification charge from ICICI (VSI\*PYU FACEB) + Standing Instruction ₹15,000/month max ceiling (RBI's e-Mandate requirement; not a commitment, just the max Meta can auto-charge for messaging overage — expected ₹0 actual charge for 100-student pilot since first 250 marketing conversations/month are free).
+- **Live smoke on new number** — sent "Hi" from personal WhatsApp to +91 91163 94657, bot responded with paidComplete message (session recognized by phone hash of sender across bot numbers — expected behavior). Full pipeline verified: Meta → webhook → Redis → router → outbound. WhatsApp username request returned "not eligible" (Meta gating on account age + traffic; revisit post-pilot).
+
+**Railway env vars updated today:** `PILOT_MODE=false`, `RAZORPAY_KEY_ID`+`SECRET`→live, `RAZORPAY_WEBHOOK_SECRET`→new value, `PAYMENT_PROVIDER=razorpay`, `META_PHONE_NUMBER_ID=1213931418470162`, `META_WABA_ID=1001892455948101`, `RENDER_CONCURRENCY=4`.
+
+**Commit — `27c6818`: Elaboration mandate + AI-mistake disclaimer.** Meet flagged that the bot's output was noticeably thinner than ChatGPT-style polish — a live comparison against ChatGPT's rewrite of the same MUN input showed the bot conservatively restating the student's terse input rather than folding in role-inherent context ("Mentored 400+ students" vs "Mentored 400+ students across Model United Nations workshops, developing public speaking, diplomacy, and negotiation skills"). Root cause: the 2026-06-26 role-implicit responsibility carve-out was PERMISSIVE ("MAY write 3rd bullet"), defensive by design, and produced weak content.
+
+Rebuilt as an ELABORATION MANDATE — every bullet in `experience[]`, `projects[]`, `por[]` MUST fold role-inherent elaboration within a 280-char cap. Three sub-rules: (a) THREE-STEP PROCESS per bullet — action verb + student's fact (metrics bolded) + role-inherent context; (b) BRIGHT LINE — role-DEFINING qualities safe, person-SPECIFIC instances unsafe (invented numbers, unnamed tools, unnamed outcomes remain FORBIDDEN); (c) METRIC-RICH inputs get polish path only (no forced elaboration). 6 worked examples embedded in the prompt covering metric-rich Experience polish, terse Experience elaboration, rich Project anchor+metric, terse Project domain-context, MUN mentor, MUN Chair, MUN Project Lead. JD-relevance priority for elaboration angle (pick angle aligning with `jd_intel.top_prioritized_skills`). Applied to Experience/Projects/PoR only — Summary retains current opener-focused behavior per Meet's scope call.
+
+Deterministic post-check `checkElaborationBounds` logs warn-level when bullets exceed 280 chars (over-elaboration) or fall under 60 chars (under-elaboration). Non-blocking observability; truncating mid-sentence would be worse than a slightly long bullet.
+
+Same commit also switched the double-check caution across both call sites (buildPreview free preview + PAID beat 3) from Hinglish `"Zaroor: PDF khol ke poora review..."` to English `"AI can make mistakes. Open the PDF and review every fact, metric, and date before sending — type 'edit' to fix anything off."` — matches ChatGPT/Claude's honesty disclaimer pattern; consistent with the surrounding English preview copy.
+
+Live proof from `e2e-happy-path` post-change: project bullet "Authored 20/20 validation checks on cold run, ensuring data integrity and reliability" — the trailing clause is role-inherent elaboration (validation checks by definition ensure data integrity), not fabrication. `npm run check` 14/14 GREEN.
+
+**Load test Phase A — new tool at `.runtime/load-test.js` (gitignored, not shipped).** Monkey-patches `client.complete()` BEFORE loading state modules so extract/keywords/rewrite/review all get mocked responses (routed by system-prompt fragment). 20 personas seeded — 10 tech (Backend/Full-stack/ML/DevOps/Frontend/Mobile/Data Engineer/Cybersecurity/SDET/Data Analyst) + 10 business (Product Analyst/Marketing/Business Analyst/Consulting/Sales/Finance/Operations/IB/HR Analytics/Growth Marketing) — realistic Indian names, real college names (JECRC, IIM-B, IIM-C, IIT-R, BITS, IIIT, etc.), real companies (Razorpay, Meesho, Nykaa, Kotak IB, McKinsey, BCG, etc.). Each persona walks the full state machine end-to-end. Cost: ~$0 OpenAI (mocked), realistic 150-500ms per-call latency to preserve queue behavior.
+
+Two runs:
+- **RENDER_CONCURRENCY=2 (default):** 20/20 delivered in 45.6s, p95 = 44.4s per-student, 139 MB RSS delta. Bottleneck confirmed: 3rd-20th students queued 5.9-30s waiting for a render slot.
+- **RENDER_CONCURRENCY=4 (proposed):** 20/20 delivered in 30.6s, p95 = 29.6s per-student, 89.7 MB RSS delta. Memory came in LOWER (counterintuitively) because faster completion means less time for garbage to accumulate before the snapshot; V8 GC cycles catch more between renders.
+
+Bumped `RENDER_CONCURRENCY=4` on Railway. Well within 512MB plan. For 100-student pilot with realistic peak concurrency of 5-10 at any moment, current sizing has ample headroom.
+
+**Business-flow strategic decision (deferred to P2).** Meet asked whether the bot serves business students as well as tech, and floated the idea of asking "Tech or Business background?" at conversation start to branch the workflow. Concluded: bot mechanically works for business students (10/10 business personas delivered in load test), but rewriter/prompts are tuned for tech (GitHub asks are irrelevant to MBA students, `tech_stack` field doesn't fit consulting engagements, README enrichment is 100% tech, elaboration examples are software-only, section headers assume software artifacts). Three implementation options laid out — hard branch (heavy), feature-flagged persona (recommended, middle-weight), JD-inference (too-late). Deferred to P2 (weeks 3-6 post-pilot) because: (a) JECRC pilot is engineering college = ~95% tech, business flow doesn't help pilot; (b) business flow tuning needs 4-5 real business resumes from Meet's network (real, not synthetic); (c) shipping business flow now risks tech-pilot regressions. Sequencing: ship tech pilot → learn from pilot → design business flow with real samples → launch as v2 to IIM/BBA cohorts.
+
+**Broadcast-ready state:** All approval clocks green (Razorpay live keys, Meta BV, Marketing template, app published), all env correct, all infra load-tested. Last integration test before broadcast is Meet's own fresh-flow walkthrough on the new number to validate elaboration mandate + new watermark + inline payment link + PoR loop + 2-message paid delivery in real end-to-end conditions.
+
+**Deferred to tomorrow (2026-07-17):**
+- **Fresh flow test** on the new number (Meet's own walkthrough) — the last P0 item before broadcast.
+- **First 5 friends onboarding** before firing to 100.
+- **Actual 100-student broadcast** via approved Marketing template.
+- **GitHub content polish** — waiting on Meet's demo GIF + logo + license choice.
+- **Social media setup** — IG/LinkedIn/X/YouTube availability + bios + first-post copy pack.
+
+**Backlog note:** Meet asked for a full prioritized punch list (P0 through P3). Not saved to repo yet — lives in the session transcript for now. If it needs to persist, next session can trim it into `docs/BACKLOG.md`.
+
+---
+
 ### Session — 2026-07-15 (Payment closeout · 3-beat paid flow · anti-piracy watermark, Claude Opus 4.7)
 
 Long single session. Two commits pushed: `4f18cec` (UX polish) and `1bd38af` (anti-piracy watermark). Razorpay live-mode closed out end-to-end; Meta Business Verification approved.
