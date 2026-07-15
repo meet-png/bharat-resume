@@ -303,7 +303,7 @@ function buildPreview(session) {
       lines.push(`✏️ "edit" to refine — 3 free edits included.`);
     }
     lines.push('');
-    lines.push(`⚠️ _Zaroor: PDF khol ke poora resume review kar lo bhejne se pehle — koi fact / metric / date galat lage to "edit" bolke fix karo._`);
+    lines.push(`⚠️ _AI can make mistakes. Open the PDF and review every fact, metric, and date before sending — type 'edit' to fix anything off._`);
   }
 
   let out = lines.join('\n');

@@ -41,7 +41,7 @@ function buildPaidCoachingMessage(session) {
 
 function buildCautionRatingMessage(session) {
   const lines = [];
-  lines.push(`⚠️ _Zaroor: PDF khol ke poora resume review kar lo bhejne se pehle — koi fact / metric / date galat lage to "edit" bolke fix karo._`);
+  lines.push(`⚠️ _AI can make mistakes. Open the PDF and review every fact, metric, and date before sending — type 'edit' to fix anything off._`);
   if (!session.rating) {
     lines.push('');
     lines.push(`⭐ _Reply 1-5 to rate this resume — 30 seconds, helps us improve fast._`);

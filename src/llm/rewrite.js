@@ -1,4 +1,6 @@
 // Multi-agent resume rewriter. PRD §7.2 architecture upgraded 2026-07-13.
+// Elaboration mandate added 2026-07-16 — see rewriteBody prompt "ELABORATION
+// MANDATE" section. Applies ONLY to experience / projects / por bullets.
 //
 // The rewriter runs in TWO PASSES orchestrated by state/generator.js:
 //
@@ -25,6 +27,48 @@
 // PROJECT ANCHOR IDENTITY, action-verb palette) are preserved verbatim in
 // rewriteBody. rewriteSummary is a smaller focused prompt.
 const { complete } = require('./client');
+const logger = require('../logger');
+
+// Length observability for the ELABORATION MANDATE (2026-07-16). The prompt
+// enforces 280-char max per bullet in experience / projects / por. This helper
+// scans the rewritten body and logs any bullets that overshoot (over-elaboration)
+// or fall well under 60 chars (under-elaboration signal — LLM was probably
+// too cautious). Non-blocking: just observability so we can tune the prompt
+// if drift is observed in production.
+const BULLET_MAX_CHARS = 280;
+const BULLET_MIN_CHARS = 60;
+function checkElaborationBounds(body) {
+  if (!body || typeof body !== 'object') return { over: 0, under: 0 };
+  const sections = [
+    ['experience', 'role'],
+    ['projects', 'name'],
+    ['por', 'role'],
+  ];
+  let over = 0;
+  let under = 0;
+  const details = [];
+  for (const [section, labelField] of sections) {
+    const entries = Array.isArray(body[section]) ? body[section] : [];
+    entries.forEach((entry, i) => {
+      const label = entry && entry[labelField] ? String(entry[labelField]).slice(0, 40) : `${section}[${i}]`;
+      const bullets = Array.isArray(entry && entry.bullets) ? entry.bullets : [];
+      bullets.forEach((b, bi) => {
+        const s = typeof b === 'string' ? b : String(b || '');
+        if (s.length > BULLET_MAX_CHARS) {
+          over++;
+          details.push({ section, entry: label, bullet: bi, len: s.length, kind: 'over' });
+        } else if (s.length < BULLET_MIN_CHARS && s.length > 0) {
+          under++;
+          details.push({ section, entry: label, bullet: bi, len: s.length, kind: 'under' });
+        }
+      });
+    });
+  }
+  if (over > 0 || under > 0) {
+    logger.warn({ over, under, details: details.slice(0, 10) }, 'elaboration bounds — bullets outside target length window');
+  }
+  return { over, under };
+}
 
 // ─────────────────────────────────────────────────────────────────────────
 // JD context block used by both passes. Priority: JD intel > jd text > role.
@@ -137,12 +181,87 @@ VOICE — modeled on a high-bar reference resume (see docs/template-reference.md
      • Input has 3+ facts        → exactly 3 bullets, one per substantive fact, distributed across SCALE, QUALITY, IMPACT angles. **NEVER compress 5 facts into 2 bullets by grouping** — the recruiter loses the metric density and the bullet reads as a wall of text.
    God-level reference resumes consistently show 3 bullets per entry. 2 is the floor and only acceptable when the input GENUINELY has <3 distinct facts AND no role-implicit responsibility can be honestly named.
 
-   *** ROLE-IMPLICIT RESPONSIBILITY (carve-out for the "honest 3rd bullet") ***
-   When the input has 2 substantive facts AND you can identify a responsibility that is INHERENTLY part of the stated role + scale, you MAY write a 3rd qualitative bullet describing that responsibility. Strict ceiling:
-     • Allowed: name a responsibility the role unambiguously includes by virtue of its scope/scale/title — e.g. for a 15-member team lead at a 450-delegate event: "Coordinated logistics across hospitality, substantive, and external-affairs committees in the lead-up and during conference"; for a SWE Intern with a deployed service: "Participated in code review and sprint planning across the platform team"; for a Marketing Intern with a campaign: "Coordinated creative review with design and brand stakeholders on each campaign drop".
-     • FORBIDDEN: inventing any NUMBER not in the input (15→25, ₹3L→₹5L). FORBIDDEN: claiming any OUTCOME the student did not state (no fabricated "secured 8 sponsorships", no fabricated "reduced cost by 30%"). FORBIDDEN: naming a skill, tool, or technology not stated. FORBIDDEN: claiming participation in something the student did not mention (e.g. don't say "presented to faculty" if they didn't say so).
-     • This rule is about NAMING THE RESPONSIBILITY, never about METRICS. If the role doesn't unambiguously imply a responsibility, do NOT invent one — write 2 bullets honestly.
-     • Voice for the 3rd bullet: DESCRIPTIVE / qualitative, no bold metric, no numbers. It should read as filling-out-the-role, not making-something-up.
+   *** ELABORATION MANDATE (Experience + Projects + PoR — 2026-07-16, applies to these THREE sections only) ***
+
+   HARD RULE for every bullet in experience[], projects[], and por[]: fold in ROLE-INHERENT elaboration to bring the bullet to full professional weight, within a hard **280-character cap** (~2 lines on the A4 template). This replaces the older "MAY write a 3rd bullet" carve-out — elaboration is now the DEFAULT behavior, not a permission.
+
+   Why: student inputs are often terse ("mentored MUN participants", "Vice Chair at MUN", "worked at X"). A recruiter-scanned resume feels thin when bullets are direct restatements of a 5-word input. Role-inherent elaboration adds the definitional context of the role — what someone in that role by definition does — which is honest AND makes the resume feel authored, not typed.
+
+   THREE-STEP PROCESS FOR EVERY BULLET:
+     1. Start with the WHAT — action verb + core fact from the student's input (all input metrics preserved verbatim, wrapped in **bold**).
+     2. Fold in ROLE-INHERENT context — one of: (a) qualities developed by the role ("public speaking, diplomacy, negotiation" for MUN mentor), (b) a responsibility inherent to the role ("moderating committee sessions" for a Chair, "code review and sprint planning" for a SWE Intern on a deployed service), (c) scope-inherent coordination ("cross-functional efforts across substantive, hospitality, external-affairs verticals" for a MUN Project Lead of 450+ delegates).
+     3. Stay ≤ 280 characters. If elaboration pushes over, TRIM the elaboration — never trim the student's original fact/metric.
+
+   BRIGHT LINE — SAFE vs UNSAFE elaboration:
+
+   SAFE (role-inherent — TRUE BY DEFINITION of the role, regardless of who holds it):
+     ✓ MUN mentor           → "developing public speaking, diplomacy, and negotiation skills"
+     ✓ MUN Chair role       → "moderating committee sessions, facilitating structured debate"
+     ✓ SWE Intern on prod   → "participating in code review and sprint planning across the platform team"
+     ✓ 15-member Project Lead at 450-delegate MUN → "coordinating cross-functional efforts across substantive, hospitality, and external-affairs verticals"
+     ✓ Marketing Intern     → "collaborating with the brand and creative teams on content-calendar planning"
+     ✓ Data Analyst intern  → "translating business requirements into repeatable data models with functional stakeholders"
+
+   UNSAFE (specific factual claims — CANNOT invent, must be in student's input):
+     ✗ Invented NUMBERS not in input        (400 → 500; 15 → 25; ₹3L → ₹5L)
+     ✗ Named TOOLS/FRAMEWORKS not in input  ("using Robert's Rules of Order", "with Jira", "using Node.js" when the student didn't say Node.js)
+     ✗ Named OUTCOMES not in input          ("won Best Delegate", "secured 8 sponsorships", "zero day-of failures")
+     ✗ Named AUDIENCES not in input         ("presented to MEA officials", "briefed the VP of Engineering")
+     ✗ Named INTERACTIONS not in input      ("collaborated with SME advisors", "reported to CTO")
+
+   THE BRIGHT LINE: role-DEFINING qualities (what the ROLE IS) are SAFE. Person-SPECIFIC instances (what THIS student did) require input evidence. If in doubt whether an elaboration is definitional or specific, PREFER the safer phrasing (a domain-quality noun over a named framework/tool).
+
+   METRIC-RICH INPUT — polish path only:
+   If the student's raw input for a specific entry already contains ≥1 quantified fact (any number, %, currency amount, scale like "50K/day"), the elaboration is OPTIONAL — the priority is (a) action-verb-first, (b) grammar polish, (c) preserved metric bolded. Add role-inherent context ONLY if there is headroom under 280 chars. NEVER sacrifice a metric to add elaboration.
+
+   JD-RELEVANCE PRIORITY (when picking an elaboration angle):
+   When multiple role-inherent angles are available, pick the one that aligns with the JD's key_responsibilities or top_prioritized_skills. Example — for a Data Analyst JD, an MUN Sec-Gen bullet should elaborate with "cross-functional stakeholder management" (JD-relevant angle) rather than "diplomacy skills" (role-inherent but off-target for this JD). If no JD signal aligns, pick the role-inherent angle most native to the role.
+
+   WORKED EXAMPLES (Input → Elaborated Output — these are the SHAPES; do not copy text):
+
+   Experience (metric-rich → polish path):
+     Input: "SWE Intern at Razorpay, May-Jul 2025, built a payment retry service that reduced failed transactions by 18% on 50K daily transactions"
+     Output bullet: "Engineered a payment retry service at Razorpay handling **50K daily transactions** — **18% reduction** in failed retries across production traffic."
+     Optional 2nd bullet (role-inherent): "Participated in code review and sprint planning cycles across the payments platform team."
+
+   Experience (terse → elaboration path):
+     Input: "Content Marketing Intern at Zomato for 3 months"
+     Output bullet 1: "Contributed as Content Marketing Intern at Zomato over a **3-month** term, authoring campaign copy for brand-marketing initiatives."
+     Output bullet 2: "Collaborated with the brand and creative teams on content-calendar planning and pre-launch reviews."
+
+   Project (rich input, README present):
+     Input: "Built DevHab — a gamified habit-tracker with streaks and a leaderboard. 300 signups. 1200 habits tracked."
+     Output bullet 1: "Built DevHab, a gamified habit-tracker with streaks and a leaderboard — **300+ signups**, **1200+ habits tracked**."
+     Output bullet 2: "Designed the loop-completion reward system driving repeated engagement across the launch cohort."
+     Output bullet 3: "Modeled the streak-recovery flow to sustain engagement when users missed daily targets."
+
+   Project (terse input):
+     Input: "Made a resume builder chatbot on WhatsApp using OpenAI"
+     Output bullet: "Architected a WhatsApp-native resume builder on top of the OpenAI API, delivering ATS-optimized PDF resumes through an end-to-end conversational pipeline."
+
+   PoR (matches recruiter-tier polish):
+     Input: "Mentored 400 students in MUN workshops"
+     Output bullet: "Mentored **400+ students** across Model United Nations workshops, developing public speaking, diplomacy, and negotiation skills for competitive committee simulations."
+
+     Input: "Vice Chair at two MUN conferences and Chair at one"
+     Output bullet: "Appointed as Vice Chair for two MUN conferences and Chairperson for one, moderating committee sessions and facilitating structured debate across delegates."
+
+     Input: "Led 15-member team as Project Lead at MUN, 450 delegates, ₹3L budget"
+     Output bullet 1: "Directed a **15-member core team** to execute Rajasthan's largest student MUN — **450+ delegates**, **₹3L+ budget**."
+     Output bullet 2: "Coordinated cross-functional efforts across substantive, hospitality, and external-affairs verticals in the lead-up to the conference."
+     Output bullet 3: "Facilitated stakeholder alignment across sub-committee leads under a fixed conference timeline."
+
+   Notice in the outputs above:
+     • Every input fact/metric is PRESERVED VERBATIM (metrics bolded).
+     • Elaboration adds ROLE-INHERENT context (what ANYONE in that role does).
+     • NO invented numbers, NO unnamed tools, NO unnamed outcomes.
+     • Every bullet stays under 280 characters.
+
+   FORBIDDEN PATTERNS that violate the mandate:
+     ✗ Copying the student's input verbatim without folding in role-inherent context — this is the anti-pattern the mandate exists to fix.
+     ✗ Adding elaboration that names a specific tool/framework/outcome the student did NOT state, even when it would be "typical" for the role.
+     ✗ Padding with soft adjectives ("effectively", "successfully", "diligently", "meticulously") to inflate length — those ARE the anti-pattern.
+     ✗ Exceeding 280 chars per bullet — density kills readability.
 
    BANNED patterns (these are INVENTION — they violate PRD §7.2 rule 1):
      • "Achieved strong [adjective]" / "Demonstrated [soft skill]" / "Enhanced [generic]"
@@ -294,6 +413,10 @@ Do NOT copy the readme_excerpt field to the output — it is fact-material for y
       const already = result.data.achievements.some((a) => /competitive programming/i.test(String(a)));
       if (!already) result.data.achievements.unshift(bullet);
     }
+
+    // Elaboration mandate observability (2026-07-16). Logs bullets outside the
+    // 60-280 char target window so we can tune the prompt if the LLM drifts.
+    checkElaborationBounds(result.data);
   }
 
   return result;
