@@ -20,7 +20,7 @@ async function getBrowser() {
   return _browser;
 }
 
-async function htmlToPdf(html) {
+async function htmlToPdf(html, opts = {}) {
   if (!html || typeof html !== 'string') throw new Error('htmlToPdf: html string required');
   const t0 = Date.now();
   let page;
@@ -31,11 +31,18 @@ async function htmlToPdf(html) {
     // PRD §9.5: wait for fonts before snapshot.
     await page.evaluateHandle('document.fonts.ready');
 
+    // Path 2 Tier B fix: Chromium's PDF export doesn't reliably honor a
+    // REPLACED @page margin declared in HTML (cascade quirk under
+    // preferCSSPageSize). Puppeteer's `margin` option DOES win — so when
+    // the caller explicitly asks for tighter margins via opts.margin,
+    // we pass it through directly. Default stays 0mm so the template's
+    // own @page controls layout for regular renders.
+    const marginOpt = opts.margin || { top: '0mm', bottom: '0mm', left: '0mm', right: '0mm' };
     const pdf = await page.pdf({
       format: 'A4',
       printBackground: true,
-      margin: { top: '0mm', bottom: '0mm', left: '0mm', right: '0mm' },
-      preferCSSPageSize: true,
+      margin: marginOpt,
+      preferCSSPageSize: !opts.margin, // when explicit margins given, defer to us
     });
     logger.info({ ms: Date.now() - t0, bytes: pdf.length }, 'html→pdf rendered');
     return pdf;

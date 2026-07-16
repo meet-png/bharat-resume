@@ -10,7 +10,22 @@ const { checkRenderedHtml } = require('../resume/sanity');
 const { uploadAndSign } = require('../store/storage');
 const { createLimiter } = require('../util/limit');
 const { config } = require('../config');
+const { PDFDocument } = require('pdf-lib');
 const logger = require('../logger');
+
+// Count pages in a PDF buffer. Used by the Path 2 measure-then-compress flow:
+// after the first render, if the resume overflows to page 2 and the caller
+// provided an onOverflow callback, we re-rewrite with oneP:true and re-render
+// once. Zero cost when the resume already fits on one page (~85% of cases).
+async function pdfPageCount(pdfBuffer) {
+  try {
+    const doc = await PDFDocument.load(pdfBuffer);
+    return doc.getPageCount();
+  } catch (e) {
+    logger.warn({ err: e.message }, 'pdfPageCount failed — defaulting to 1');
+    return 1;
+  }
+}
 
 // Bound concurrent render+watermark pipelines per process — each holds a
 // Chromium page and rasterizes A4 at 3x, so a burst of inbound messages must
@@ -59,6 +74,33 @@ async function deliverPdf(session, phoneHash, opts = {}) {
         logger.warn({ phoneHash: String(phoneHash).slice(0, 12), warnings: sanity.warnings }, 'sanity warnings (not blocking delivery)');
       }
       let pdf = await htmlToPdf(html);
+
+      // Path 2 measure-then-compress (2026-07-16). If the caller provided an
+      // onOverflow callback and the first-pass render produced >1 page,
+      // request a compressed resume from the callback and re-render ONCE.
+      // Zero overhead when the resume already fits (~85% of cases).
+      if (opts.onOverflow) {
+        const pages = await pdfPageCount(pdf);
+        if (pages > 1) {
+          logger.info({ phoneHash: String(phoneHash).slice(0, 12), initialPages: pages }, 'first render overflowed — invoking compression callback');
+          const compressed = await opts.onOverflow(session.resume_json_rewritten);
+          if (compressed) {
+            session.resume_json_rewritten = compressed;
+            const compressedHtml = renderHtml(compressed);
+            const sanity2 = checkRenderedHtml(compressedHtml);
+            if (sanity2.ok) {
+              pdf = await htmlToPdf(compressedHtml);
+              const pagesAfter = await pdfPageCount(pdf);
+              logger.info({ phoneHash: String(phoneHash).slice(0, 12), pagesAfter }, 'compression pass rendered');
+            } else {
+              logger.warn({ phoneHash: String(phoneHash).slice(0, 12), violations: sanity2.violations }, 'compressed render failed sanity — falling back to first-pass');
+            }
+          } else {
+            logger.warn({ phoneHash: String(phoneHash).slice(0, 12) }, 'onOverflow callback returned no compression — shipping original');
+          }
+        }
+      }
+
       if (!opts.clean) {
         // Pass the recipient's WhatsApp phone (session.phone_from) so the
         // watermark bakes the last-5 digits into the grid for accountability.

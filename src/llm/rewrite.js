@@ -141,12 +141,46 @@ function inlineReadmesForRewrite(resumeJson) {
 // Rewrites every section EXCEPT the summary. The summary field is written back
 // as an empty string; PASS 2 (rewriteSummary) fills it in.
 // ─────────────────────────────────────────────────────────────────────────
-async function rewriteBody({ resumeJson, jdIntel, jdRole, jdText, jdKeywords, jdGeneric, phoneFrom }) {
+async function rewriteBody({ resumeJson, jdIntel, jdRole, jdText, jdKeywords, jdGeneric, phoneFrom, oneP = false }) {
   const jdContext = buildJdContextBlock({ jdIntel, jdText, jdRole, jdKeywords, jdGeneric });
   const cleanedResume = inlineReadmesForRewrite(resumeJson);
 
-  const system = `You are a resume writer for the Indian job market. Rewrite the given resume JSON into impact-oriented, ATS-friendly English. Output the SAME JSON schema with rewritten content. **DO NOT write the summary field in this pass — leave it as empty string ""; a separate final pass will author it after the body is finalized.**
+  // ONE-PAGE compression block. Path 2 (2026-07-16 evening): the default
+  // rewrite is FULL ELABORATION with no length awareness. The generator/
+  // delivery pipeline renders, MEASURES page count, and only if it overflows
+  // does it re-invoke this function with oneP:true. This preserves quality on
+  // thin/medium resumes (~85% of cases) and compresses only the rich resumes
+  // that would otherwise flow to page 2.
+  const onePageBlock = oneP ? `
+═══════════════════════════════════════════════════
+ONE-PAGE COMPRESSION (activated — the first-pass rewrite overflowed to page 2):
+═══════════════════════════════════════════════════
+The first-pass rewrite produced content that exceeded ONE A4 PAGE at 10pt Georgia with 14mm margins (~4,200 chars usable). Re-run with the compression tactics below to fit ONE page cleanly. This is the second attempt — do NOT elaborate as freely; be surgical.
 
+Character budget targets:
+  - Summary       : ~350 chars   (3 lines max, authored in Pass 2)
+  - Education     : ~200 chars
+  - Skills        : ~500 chars   (3-6 categories, 5-7 items each)
+  - Experience    : ~950 chars   (2 entries × ~475 chars)
+  - Projects      : ~950 chars   (2 entries × ~475 chars)
+  - PoR           : ~650 chars   (1-2 entries × ~325 chars)
+  - Certifications: ~150 chars
+  - Achievements  : ~150 chars
+
+Compression tactics (apply in ORDER — least destructive first):
+  1. Cap bullets at 3 per experience/project entry, 3 per PoR entry — HARD LIMIT.
+  2. Tighten bullet character length: 200-char cap per bullet instead of the default 280.
+  3. Trim elaboration on SECONDARY bullets (bullet 2, 3) — preserve full elaboration on bullet 1 (the identity anchor).
+  4. In PoR: consolidate to 2 bullets max per role.
+  5. Skills: cap items at 6 per category.
+
+NEVER remove a QUANTIFIED FACT the student stated. If elaboration must go, drop qualitative parts, not numbers.
+
+═══════════════════════════════════════════════════
+` : '';
+
+  const system = `You are a resume writer for the Indian job market. Rewrite the given resume JSON into impact-oriented, ATS-friendly English. Output the SAME JSON schema with rewritten content. **DO NOT write the summary field in this pass — leave it as empty string ""; a separate final pass will author it after the body is finalized.**
+${onePageBlock}
 ═══════════════════════════════════════════════════
 GOAL — HIGHEST POSSIBLE ATS SCORE, WITHOUT GAMING:
 ═══════════════════════════════════════════════════

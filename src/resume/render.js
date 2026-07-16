@@ -236,11 +236,68 @@ function prepResume(r0) {
   };
 }
 
-function renderHtml(resumeJson) {
+// Optional CSS overrides applied INLINE at the very end of the rendered HTML
+// (after all template styles). Used by Path 2 Tier 3 compression: when the
+// resume still overflows after prompt-level oneP compression, we tighten the
+// layout AND slightly reduce font size deterministically. Overrides are
+// scoped and non-destructive to the primary template.
+function compactCssOverride(opts = {}) {
+  const {
+    fontScale = 1,       // 0.95 shrinks all body/section/name/meta text by 5%
+    sectionGap = 9,      // pt — default is 9pt; tighter = fewer page breaks
+    entryGap = 6,        // pt — default is 6pt
+    bulletGap = 3,       // pt — bullet spacing
+    pageMargin = '10mm 16mm', // A4 top/bottom left/right — default template has 14mm top/bot
+  } = opts;
+  const bodyPt   = (10   * fontScale).toFixed(2);
+  const namePt   = (17   * fontScale).toFixed(2);
+  const secPt    = (12   * fontScale).toFixed(2);
+  const metaPt   = (9    * fontScale).toFixed(2);
+  return `<style>
+    /* Path 2 compact override — Meet's 2026-07-16 call:
+       "free space is present above the name and bottom of page 1 — use it first".
+       Reclaim vertical space from the @page margins BEFORE touching content. */
+    @page { size: A4; margin: ${pageMargin}; }
+    :root {
+      --sz-body: ${bodyPt}pt;
+      --sz-name: ${namePt}pt;
+      --sz-section: ${secPt}pt;
+      --sz-meta: ${metaPt}pt;
+    }
+    section { margin-top: ${sectionGap}pt; }
+    .entry { margin-bottom: ${entryGap}pt; }
+    .bullet, li { margin-bottom: ${bulletGap}pt; }
+    /* Relax the h2 "avoid break-after" rule so a small tail section
+       (e.g. certifications with 2 lines) can sit at the bottom of page 1
+       instead of being pushed entirely to page 2. Orphan/widow control
+       keeps it graceful. */
+    h2 { break-after: auto; }
+    section { orphans: 2; widows: 2; }
+  </style>`;
+}
+
+function renderHtml(resumeJson, opts = {}) {
   if (!resumeJson) throw new Error('renderHtml: resumeJson required');
   const ctx = prepResume(resumeJson);
-  const html = getTemplate()(ctx);
+  let html = getTemplate()(ctx);
+  if (opts.compact) {
+    const cfg = opts.compact === true ? { fontScale: 0.95, sectionGap: 6, entryGap: 4, pageMargin: '9mm 16mm' } : opts.compact;
+    // Chromium's PDF export doesn't cascade multiple @page rules cleanly —
+    // it locks onto the FIRST @page seen. So we REPLACE the template's
+    // original @page rule instead of appending a second one.
+    html = html.replace(/@page\s*\{[^}]*\}/i, `@page { size: A4; margin: ${cfg.pageMargin || '9mm 16mm'}; }`);
+    // Everything else (font scale, section gap, entry gap, h2 break rule)
+    // still appended just before </head> — those cascade normally.
+    const override = compactCssOverride(cfg);
+    // Strip the @page from the override since we replaced it inline above.
+    const overrideNoPage = override.replace(/@page[^{]*\{[^}]*\}/i, '');
+    if (/<\/head>/i.test(html)) {
+      html = html.replace(/<\/head>/i, `${overrideNoPage}</head>`);
+    } else {
+      html = overrideNoPage + html;
+    }
+  }
   return html;
 }
 
-module.exports = { renderHtml, prepResume };
+module.exports = { renderHtml, prepResume, compactCssOverride };

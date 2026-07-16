@@ -34,6 +34,14 @@ const schema = z.object({
   ANTHROPIC_API_KEY: z.preprocess(emptyAsUndefined, z.string().optional()),
   LLM_PRIMARY: z.string().default('gpt-4o-mini'),
   LLM_FALLBACK: z.string().default('claude-sonnet-4-6'),
+  // Edit-feature model — separate from LLM_PRIMARY because edit intent
+  // classification and application need stronger reasoning than extraction
+  // or rewrite. Meet's 2026-07-16 call: hybrid deterministic fast-path +
+  // gpt-4o for the LLM path so "ChatGPT-brain" quality on complex edits.
+  // Hot-swap to claude-sonnet-4-6 (needs ANTHROPIC_API_KEY + separate client)
+  // if gpt-4o output isn't good enough on live pilot data. Cost ~$0.025/edit
+  // at gpt-4o vs ~$0.002 at gpt-4o-mini (12x more; trivial at pilot scale).
+  LLM_EDIT: z.string().default('gpt-4o'),
 
   RAZORPAY_KEY_ID: z.preprocess(emptyAsUndefined, z.string().optional()),
   RAZORPAY_KEY_SECRET: z.preprocess(emptyAsUndefined, z.string().optional()),

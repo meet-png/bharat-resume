@@ -147,7 +147,41 @@ async function tryGenerate(session, phoneFrom, phoneHash) {
   if (session.state !== STATES.GENERATING) return null;
   try {
     await runGeneration(session, phoneFrom);
-    const delivery = await deliverPdf(session, phoneHash, { clean: unlocked(session) });
+    // Path 2 measure-then-compress (2026-07-16): if the initial rewrite
+    // renders to >1 page, this callback re-runs rewriteBody+rewriteSummary
+    // with the 1-page compression rule active. Delivery re-renders with the
+    // compressed content. Zero overhead when the resume already fits.
+    const onOverflow = async () => {
+      try {
+        const { rewriteBody, rewriteSummary } = require('../llm/rewrite');
+        const jdIntel = {
+          role_noun: session.jd_role_noun, role_title: session.jd_role_title,
+          domain: session.jd_domain, experience_level: session.jd_experience_level,
+          key_responsibilities: session.jd_key_responsibilities, top_prioritized_skills: session.jd_top_prioritized_skills,
+          keywords: session.jd_keywords,
+        };
+        const bodyRes = await rewriteBody({
+          resumeJson: session.resume_json,
+          jdIntel,
+          jdRole: session.jd_role, jdText: session.jd_text, jdKeywords: session.jd_keywords, jdGeneric: session.jd_generic,
+          phoneFrom,
+          oneP: true,
+        });
+        if (!bodyRes.data) return null;
+        const sumRes = await rewriteSummary({
+          body: bodyRes.data, jdIntel,
+          jdText: session.jd_text, jdRole: session.jd_role, jdGeneric: session.jd_generic,
+          rawResume: session.resume_json,
+        });
+        bodyRes.data.summary = (sumRes.data && sumRes.data.summary) || '';
+        logger.info({ phoneHash: String(phoneHash).slice(0, 12) }, 'overflow re-rewrite complete (oneP=true)');
+        return bodyRes.data;
+      } catch (e) {
+        logger.warn({ err: e.message }, 'overflow re-rewrite failed — shipping original');
+        return null;
+      }
+    };
+    const delivery = await deliverPdf(session, phoneHash, { clean: unlocked(session), onOverflow });
     // Delivery is checked BEFORE composing the response. If the PDF didn't
     // render/upload, we must NOT advance to DELIVERED or emit the success
     // preview (ATS score, "tayar", checkmarks) — that would claim a resume the
@@ -260,7 +294,37 @@ async function runEdit(session, phoneHash, instruction) {
 
   session.resume_json_rewritten = result.data;
   rescore(session);
-  const delivery = await deliverPdf(session, phoneHash, { clean: paid });
+  // Edits also respect the 1-page rule — if an edit adds content that pushes
+  // the resume to page 2, the compression callback fires the same way as in
+  // tryGenerate.
+  const editOnOverflow = async () => {
+    try {
+      const { rewriteBody, rewriteSummary } = require('../llm/rewrite');
+      const jdIntel = {
+        role_noun: session.jd_role_noun, role_title: session.jd_role_title,
+        domain: session.jd_domain, experience_level: session.jd_experience_level,
+        key_responsibilities: session.jd_key_responsibilities, top_prioritized_skills: session.jd_top_prioritized_skills,
+        keywords: session.jd_keywords,
+      };
+      const bodyRes = await rewriteBody({
+        resumeJson: session.resume_json_rewritten, jdIntel,
+        jdRole: session.jd_role, jdText: session.jd_text, jdKeywords: session.jd_keywords, jdGeneric: session.jd_generic,
+        oneP: true,
+      });
+      if (!bodyRes.data) return null;
+      const sumRes = await rewriteSummary({
+        body: bodyRes.data, jdIntel,
+        jdText: session.jd_text, jdRole: session.jd_role, jdGeneric: session.jd_generic,
+        rawResume: session.resume_json_rewritten,
+      });
+      bodyRes.data.summary = (sumRes.data && sumRes.data.summary) || '';
+      return bodyRes.data;
+    } catch (e) {
+      logger.warn({ err: e.message }, 'edit overflow re-rewrite failed');
+      return null;
+    }
+  };
+  const delivery = await deliverPdf(session, phoneHash, { clean: paid, onOverflow: editOnOverflow });
 
   // Check delivery BEFORE claiming success. If the re-render failed, do NOT
   // consume an edit and do NOT send the "Updated ✓" template. The change is
