@@ -10,6 +10,7 @@ const { respond } = require('../llm/respond');
 const { scoreResume, suggestionsFor } = require('../resume/ats_score');
 const { getSession, setSession, checkRateLimit, acquirePhoneLock, releasePhoneLock, RATELIMIT_MAX } = require('../store/redis');
 const { logEvent, bumpUserActivity } = require('../telemetry/events');
+const { sendWhatsApp } = require('../messaging');
 const { config } = require('../config');
 const logger = require('../logger');
 
@@ -170,6 +171,22 @@ async function ensurePaymentLink(session, phoneHash) {
 // Reply is { text, media } when PDF was delivered, else string.
 async function tryGenerate(session, phoneFrom, phoneHash) {
   if (session.state !== STATES.GENERATING) return null;
+
+  // Interstitial ack. Rewrite + PDF + upload takes ~15-30s and the student
+  // sees silence during that window — many think the bot froze. Send a
+  // quick "generating, hang tight" message FIRST so the wait feels normal.
+  // Best-effort: failure here must not block generation.
+  if (phoneFrom) {
+    try {
+      await sendWhatsApp({
+        to: phoneFrom,
+        body: '⏳ Resume ban raha hai — 20-30 seconds wait kariye, PDF bhej dunga.',
+      });
+    } catch (e) {
+      logger.warn({ err: e.message }, 'generating-ack send failed (non-fatal)');
+    }
+  }
+
   try {
     await runGeneration(session, phoneFrom);
     // Path 2 measure-then-compress (2026-07-16): if the initial rewrite
