@@ -58,6 +58,88 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 
 ## 3. Session log
 
+### Session — 2026-07-16 → 2026-07-17 (Gunjita live-test bug wave + Meta refusal guardrails + accuracy dashboard, Claude Opus 4.7)
+
+**Context:** Meet started onboarding friends after Meta went LIVE (2026-07-16 morning). First real friend (Gunjita) hit multiple traps we hadn't seen in synthetic tests. Session became a rapid-fire diagnose-fix-ship loop across 12 commits. Also polished admin dashboard for broadcast day. Full trace lives at `REMAINING.md` (created this session).
+
+**Bugs found + fixed (chronological):**
+
+1. **LinkedIn "M abhi share ni krskti" ignored** — `SKIP_RE` (exact word match) missed natural Hinglish decline; LLM generated soft "share when you can" clarification and held state. Fixed:
+   - Added `OPTIONAL_DECLINE_HINT` regex covering "abhi nahi", "share nahi kar sakti", "baad me batungi", "later bata\w+", "next time", "for now", plus stem-based Hinglish verb forms.
+   - Hardened `AWAITING_LINKEDIN` + `AWAITING_GITHUB` instructions with explicit DECLINE HANDLING block.
+   - Commit `152608d`.
+
+2. **Education merge WIPED fields on every turn** — CRITICAL. `Object.assign(rj.education[0], x.education)` blindly copied LLM-returned nulls, overwriting previous good fields. Gunjita gave college → then degree → then year → each answer wiped the last. Fixed:
+   - `AWAITING_EDUCATION.merge` now iterates keys and only copies non-null non-blank values.
+   - Instruction reminds LLM that already-filled fields are in current_resume_json context, and college+degree is sufficient to advance.
+   - Router post-merge sufficiency check for AWAITING_EDUCATION: college+degree present → advance regardless of LLM clarification.
+   - Router-wide safety nets applied: 6-turn valve for required single-field states + 3-skip counter.
+   - Commit `9ce7c30`.
+
+3. **Universal 2-skip escape hatch** (per Meet: *"if a person says skip 2 times at any question, it should get skipped irrespective"*) — added at top of `handleInner`. Streak resets on any non-skip input. Also added 18-turn safety valve for multi-entry states (experience/projects/POR/certs/achievements) and 6-turn for optional single-field. Both hatches clear ALL pending sub-state markers (pending_experience/project/por/cert, exp_focus, *_more_pending). Commit `6030304`.
+
+4. **LIVE-now dashboard was inaccurate** — `last_active_at` only bumped by milestone events (session_started, resume_delivered, edit_requested, payment_*). Students mid Phase-2 Q&A (which fires no logEvent) fell off after 5 min despite actively chatting. Fixed:
+   - New `bumpUserActivity(phoneHash)` in `events.js` — upserts users row WITHOUT writing an event row. Called on every inbound message from `handleInner`.
+   - Window tightened 5min → 3min ("live") + added secondary 15min "in-conversation" count.
+   - LIVE card auto-refreshes every 30s (meta http-equiv=refresh); IST timezone forced on all timestamps (Railway runs UTC).
+   - Admin `basicAuth` prod-guard returns 503 "admin auth not configured" if `ADMIN_PASSWORD` unset — Meet had to add this to Railway env to unlock dashboard.
+   - Commits `55fb43d`, `5fa534e`, `1f5952f`.
+
+5. **Skills + coding_profiles merges wiped on every turn** (same class as bug #2) — `rj.skills = x.skills` and `rj.coding_profiles = x.coding_profiles` replaced whole arrays. Student who added "Also add Tableau and Power BI" after "Python, SQL" lost Python + SQL. Fixed:
+   - Skills merges by category label (case-insensitive), dedupes items case-insensitively.
+   - Coding profiles merges by platform (case-insensitive); first non-null url/stat wins.
+   - Also hardened CGPA + COURSEWORK LLM instructions with explicit DECLINE HANDLING blocks (same pattern as LinkedIn/GitHub).
+   - Commit `f965730`.
+
+6. **Hinglish stress test built + committed** — `scripts/stress-hinglish.js` locks in every Gunjita-class bug + Hinglish natural pattern as a runnable regression test. NOT in npm run check (hits paid LLM, ~$0.10/run, ~45s). 21→23 scenarios covering all 15 states. Result: 23/23 pass at commit `14e995e`. Commits `2152593`, `14e995e`.
+
+7. **Experience "6 mahine" accepted as dates** (Meet live test) — LLM extracted `dates: "6 mahine"`, router accepted (truthy), resume rendered "Razorpay | 6 mahine". Fixed:
+   - `VALID_DATES_RE` requires year (19XX/20XX) OR present/current/ongoing/abhi marker. `experienceHardMissing` treats truthy-but-invalid dates as MISSING.
+   - `expSlotQuestion` dates label spells out format ("Jan 2024 - Jul 2024", "May 2024 - Present").
+   - LLM instruction has explicit DATES FORMAT block rejecting duration patterns.
+   - Also added ROLE SPECIFICITY block — LLM infers domain from bullets (API → "SWE Intern", SQL → "Data Analyst Intern") rather than bare "Intern".
+   - Commit `14e995e`.
+
+8. **Projects re-asked for metrics already given** (Meet live test) — student sent "AI chatbot banaya GPT use kiya customer support ke liye 500+ users hain accuracy 92%"; LLM extracted name + tech but bullets=[]. On next turn (link decline) bot asked "koi aur outcome — accuracy ya users?" — instant trust loss. Fixed:
+   - Added "CASUAL HINGLISH METRIC MINING (CRITICAL)" block with 7 pattern examples and worked example using Meet's exact live-test input.
+   - PRE-CHECK tightened to check UNION of bullets across pending_project + current message.
+   - Commit `14e995e`.
+
+9. **Interstitial ack before GENERATING** — user typed 'done' on achievements → 15-30s silence while rewrite+PDF ran → students thought bot froze. Fixed: send "⏳ Resume ban raha hai — 20-30 seconds wait kariye, PDF bhej dunga" via sendWhatsApp at top of `tryGenerate`. Best-effort — failure doesn't block generation. Commit `23f3489`.
+
+10. **"Rate my existing resume" / file uploads** — students sending PDF/DOCX of existing resume or asking bot to rate/review/modify it. Not our scope. Fixed:
+    - `REVIEW_EXISTING_RE` at top of handleInner (right after RESET_RE). 23 English + Hinglish patterns covered; 14 legit-flow patterns correctly bypass. Includes "rate my resume", "review my current CV", "resume rate karo", "mera resume kaisa hai", "improve my old resume", etc. Excludes "edit" (goes to EDIT_RE).
+    - Non-text messages (document/image/audio/video/sticker) hit transport-level refusal in `src/routes/whatsapp.js` BEFORE state machine runs.
+    - Refusal is formal + warm + Hinglish-first, ends with "reset" instruction.
+    - Commit `9177934`.
+
+**Security audit (before broadcast)** — Meet asked for full end-to-end security check. Ran through webhook auth (Meta HMAC, Razorpay HMAC — both timing-safe compare), SSRF defense (`src/security/ssrf.js` — IP-literal + DNS-resolved private-range block + Puppeteer request interceptor), XSS in PDF template (`src/resume/render.js` — every string decodeEntities → escapeHtml → SafeString; `safeUrl` blocks javascript:/data:/file:), payment integrity (HMAC-gated, amount hardcoded, Redis NX idempotency, phone hash in Razorpay notes not raw phone), PII (HMAC phone hash with PHONE_HASH_SECRET, Pino redact for auth headers + secrets, undici cause chain stripped to prevent API key leak), rate limits (30 msg/60s per phone, per-phone lock, JD 24h cache), storage (300s signed URL TTL, private bucket), secrets (git history clean). Verdict: broadcast-ready. One minor nit: Razorpay webhook doesn't verify amount server-side (HMAC prevents forgery so not critical; note for post-broadcast).
+
+**E2E verification (60/60 checks pass across 3 test suites):**
+- `.runtime/e2e-happy-path.js` — full 15-state Q&A → preview PDF → 16/16 pass
+- `.runtime/test-day4.js` — rewriter → HTML → Puppeteer → watermark → Supabase → signed URL → 14/14 pass (591 KB PDF verified downloadable)
+- `.runtime/test-payment.js` — payment link create → webhook verify → clean PDF → 2-message post-payment delivery → idempotency → failure recovery → 30/30 pass
+
+**Broadcast collateral drafted (in this conversation, not committed):**
+- WhatsApp group forward message for CS group at JECRC (CRT context; friendly not sales-y; ends with "even if you have a resume, please test — feedback welcome"). Includes bot number +91 91163 94657.
+
+**Deferred to next session:**
+- Path 2 (1-page enforcement) — infrastructure landed (`oneP` param, compact CSS, margin override) but Meet's own resume still shows 2 pages. Options: accept 2-page for rich content OR deterministic tail-trim OR revisit after friends' feedback.
+- Business flow expansion (P2, per earlier decision — tech-only pilot first).
+- Server-side amount check on Razorpay webhook (defense-in-depth, ~20 lines).
+- Live-test on the new number by Meet — test script drafted in conversation (30 steps covering every state + all today's fixes).
+- Post-payment memory update to auto-memory system.
+
+**Commits pushed this session (chronological):** `152608d` · `9ce7c30` · `6030304` · `55fb43d` · `5fa534e` · `1f5952f` · `f965730` · `2152593` · `14e995e` · `23f3489` · `9177934` — 11 commits total.
+
+**Next session — start here:**
+1. Read `PROGRESS.md` §1 status grid + this session entry.
+2. Read `REMAINING.md` at repo root — the end-to-end checklist for launch-to-100.
+3. Check `git log --oneline -15` to see any Meet-authored commits or manual Railway env changes since.
+4. If Meet did the live test: read his last screenshots, apply fixes to whatever broke.
+5. If Meet did the broadcast: metrics dashboard at `bharat-resume-production.up.railway.app/admin/metrics` shows real state.
+6. `node scripts/stress-hinglish.js` if you touched any LLM prompt or merge function — 23/23 should stay green (~45s, ~$0.10).
+
 ### Session 1 — 2026-06-19 (Claude Opus 4.7)
 
 **Did:**
