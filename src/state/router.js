@@ -459,6 +459,62 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
   // post-payment webhook can push the clean PDF outbound. Never logged/exposed.
   if (phoneFrom) session.phone_from = phoneFrom;
 
+  // --- Universal 2-skip escape hatch. Per Meet 2026-07-16: if a student
+  // types skip / nahi / abhi nahi / any decline TWICE on the same question,
+  // move on — irrespective of whether the field is required. Missing info
+  // can always be added later via "edit" post-generation. Never trap the
+  // student in a loop just because a required field wasn't parseable.
+  //
+  // Consecutive tracking: streak resets to 1 on the FIRST skip in a new
+  // state, +1 on each subsequent skip in the SAME state, back to 0 on any
+  // non-skip input. This lets a student who typed "skip" once, answered
+  // partially, then said "skip" again NOT trigger an accidental force-skip.
+  {
+    const isSkipLike = SKIP_RE.test(trimmed) || NO_MORE_HINT.test(trimmed) || OPTIONAL_DECLINE_HINT.test(trimmed);
+    if (isSkipLike) {
+      if (session.skip_streak_state === session.state) {
+        session.skip_streak = (session.skip_streak || 0) + 1;
+      } else {
+        session.skip_streak = 1;
+        session.skip_streak_state = session.state;
+      }
+    } else {
+      session.skip_streak = 0;
+      session.skip_streak_state = null;
+    }
+
+    // Escape hatch fires only for Phase 2 collection states (the ones with
+    // extraction questions). DELIVERED / AWAITING_EDIT_OR_DONE / payment
+    // states don't extract data and shouldn't be "skipped" this way.
+    if (isSkipLike && session.skip_streak >= 2 && PHASE_2_STATES.has(session.state)) {
+      const stuckState = session.state;
+      // Clear any half-filled sub-state markers so the next section starts
+      // clean. A stranded pending_experience / pending_project would poison
+      // the following state's flow.
+      session.pending_experience = null;
+      session.exp_focus = null;
+      session.exp_more_pending = false;
+      session.exp_missing_focus_asked = false;
+      session.pending_project = null;
+      session.proj_focus = null;
+      session.projects_more_pending = false;
+      session.pending_por = null;
+      session.por_more_pending = false;
+      session.pending_cert = null;
+      session.cert_link_pending = null;
+      session.cert_extract_pending = null;
+      session.certs_more_pending = false;
+      session.achievements_more_pending = false;
+      session.state = NEXT_STATE[stuckState] || session.state;
+      session.skip_streak = 0;
+      session.skip_streak_state = null;
+      logger.warn({ phoneHash: phoneHash.slice(0, 12), stuckState, next: session.state }, 'universal 2-skip escape hatch fired');
+      const genReply = await tryGenerate(session, phoneFrom, phoneHash);
+      await setSession(phoneHash, session);
+      return genReply || pickPrompt(session.state, session);
+    }
+  }
+
   // show me: dump rewritten resume if available (post-generation), else collected raw.
   if (SHOW_RE.test(trimmed)) {
     const isRewritten = !!session.resume_json_rewritten;
@@ -1102,49 +1158,27 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
       return genReply || pickPrompt(session.state, session);
     }
 
-    // Per-state turn counter + repeated-skip counter. Safety net so no
-    // required single-field state can loop the student forever. Real bug
-    // 2026-07-16: AWAITING_EDUCATION merge overwrote fields with null every
-    // turn (Object.assign) → LLM saw "still missing" → re-asked → student
-    // typed SKIP × 4, bot kept asking. Merge is fixed; this counter is the
-    // belt-and-suspenders so the SAME state never traps another student.
+    // Turn-count safety valve. Applies to REQUIRED single-field Phase 2
+    // states only (multi-entry and optional states have their own handlers).
+    // If we've had 6+ back-and-forths on a single required field, something's
+    // upstream-broken (LLM confused, unparseable input, or a merge bug).
+    // Force-advance rather than trap. The universal 2-skip escape hatch at
+    // the top of handleInner is the PRIMARY exit; this is just belt-and-
+    // suspenders for the "student keeps trying earnestly but LLM misreads it"
+    // pathology.
     if (session.last_phase2_state !== current) {
       session.last_phase2_state = current;
       session.phase2_turns = 1;
-      session.phase2_skip_attempts = 0;
     } else {
       session.phase2_turns = (session.phase2_turns || 0) + 1;
     }
-    const isDeclineLike = SKIP_RE.test(trimmed) || NO_MORE_HINT.test(trimmed) || OPTIONAL_DECLINE_HINT.test(trimmed);
-    if (isDeclineLike) session.phase2_skip_attempts = (session.phase2_skip_attempts || 0) + 1;
-
-    // Force-advance guards. Applied to REQUIRED single-field states only
-    // (optional states already advance on skip above; multi-entry states like
-    // EXPERIENCE / PROJECTS / POR / CERTS / ACHIEVEMENTS have their own
-    // sub-state loops and were handled earlier in this file).
     const isRequiredSingleField = !optional && current !== STATES.AWAITING_JD;
-    if (isRequiredSingleField) {
-      // (a) Student typed SKIP-like ≥ 3 times — respect the exit, advance with
-      //     whatever we have. Even required education can be filled/edited
-      //     post-generation via "edit". Never trap the student.
-      if (session.phase2_skip_attempts >= 3) {
-        logger.warn({ phoneHash: phoneShort, state: current, skips: session.phase2_skip_attempts }, 'force-advance: repeated skip on required state');
-        session.state = NEXT_STATE[current];
-        session.phase2_skip_attempts = 0;
-        const genReply = await tryGenerate(session, phoneFrom, phoneHash);
-        await setSession(phoneHash, session);
-        return genReply || pickPrompt(session.state, session);
-      }
-      // (b) Turn-count safety valve — after 6 back-and-forths on a single
-      //     required field, something is wrong (LLM confused, or student's
-      //     answers aren't parseable). Advance anyway and let them edit later.
-      if (session.phase2_turns >= 6) {
-        logger.warn({ phoneHash: phoneShort, state: current, turns: session.phase2_turns }, 'force-advance: turn-count safety valve');
-        session.state = NEXT_STATE[current];
-        const genReply = await tryGenerate(session, phoneFrom, phoneHash);
-        await setSession(phoneHash, session);
-        return genReply || pickPrompt(session.state, session);
-      }
+    if (isRequiredSingleField && session.phase2_turns >= 6) {
+      logger.warn({ phoneHash: phoneShort, state: current, turns: session.phase2_turns }, 'force-advance: turn-count safety valve');
+      session.state = NEXT_STATE[current];
+      const genReply = await tryGenerate(session, phoneFrom, phoneHash);
+      await setSession(phoneHash, session);
+      return genReply || pickPrompt(session.state, session);
     }
 
     try {
