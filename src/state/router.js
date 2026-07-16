@@ -1101,10 +1101,71 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
       await setSession(phoneHash, session);
       return genReply || pickPrompt(session.state, session);
     }
+
+    // Per-state turn counter + repeated-skip counter. Safety net so no
+    // required single-field state can loop the student forever. Real bug
+    // 2026-07-16: AWAITING_EDUCATION merge overwrote fields with null every
+    // turn (Object.assign) → LLM saw "still missing" → re-asked → student
+    // typed SKIP × 4, bot kept asking. Merge is fixed; this counter is the
+    // belt-and-suspenders so the SAME state never traps another student.
+    if (session.last_phase2_state !== current) {
+      session.last_phase2_state = current;
+      session.phase2_turns = 1;
+      session.phase2_skip_attempts = 0;
+    } else {
+      session.phase2_turns = (session.phase2_turns || 0) + 1;
+    }
+    const isDeclineLike = SKIP_RE.test(trimmed) || NO_MORE_HINT.test(trimmed) || OPTIONAL_DECLINE_HINT.test(trimmed);
+    if (isDeclineLike) session.phase2_skip_attempts = (session.phase2_skip_attempts || 0) + 1;
+
+    // Force-advance guards. Applied to REQUIRED single-field states only
+    // (optional states already advance on skip above; multi-entry states like
+    // EXPERIENCE / PROJECTS / POR / CERTS / ACHIEVEMENTS have their own
+    // sub-state loops and were handled earlier in this file).
+    const isRequiredSingleField = !optional && current !== STATES.AWAITING_JD;
+    if (isRequiredSingleField) {
+      // (a) Student typed SKIP-like ≥ 3 times — respect the exit, advance with
+      //     whatever we have. Even required education can be filled/edited
+      //     post-generation via "edit". Never trap the student.
+      if (session.phase2_skip_attempts >= 3) {
+        logger.warn({ phoneHash: phoneShort, state: current, skips: session.phase2_skip_attempts }, 'force-advance: repeated skip on required state');
+        session.state = NEXT_STATE[current];
+        session.phase2_skip_attempts = 0;
+        const genReply = await tryGenerate(session, phoneFrom, phoneHash);
+        await setSession(phoneHash, session);
+        return genReply || pickPrompt(session.state, session);
+      }
+      // (b) Turn-count safety valve — after 6 back-and-forths on a single
+      //     required field, something is wrong (LLM confused, or student's
+      //     answers aren't parseable). Advance anyway and let them edit later.
+      if (session.phase2_turns >= 6) {
+        logger.warn({ phoneHash: phoneShort, state: current, turns: session.phase2_turns }, 'force-advance: turn-count safety valve');
+        session.state = NEXT_STATE[current];
+        const genReply = await tryGenerate(session, phoneFrom, phoneHash);
+        await setSession(phoneHash, session);
+        return genReply || pickPrompt(session.state, session);
+      }
+    }
+
     try {
       const { data, usage } = await extractSection({ state: current, body: trimmed, resumeJson: session.resume_json, session });
       logger.info({ phoneHash: phoneShort, state: current, usage }, 'extracted');
       SECTION_CONFIG[current].merge(session.resume_json, data);
+
+      // Post-merge sufficiency check: for AWAITING_EDUCATION, if we now have
+      // college + degree, advance regardless of LLM asking for branch/year.
+      // Branch and year are nice-to-have. This prevents the LLM's over-eager
+      // clarification from looping when the student has actually given enough.
+      if (current === STATES.AWAITING_EDUCATION) {
+        const e = (session.resume_json.education && session.resume_json.education[0]) || {};
+        if (e.college && e.degree) {
+          session.state = NEXT_STATE[current];
+          const genReply = await tryGenerate(session, phoneFrom, phoneHash);
+          await setSession(phoneHash, session);
+          return genReply || pickPrompt(session.state, session);
+        }
+      }
+
       if (data.clarification_needed) {
         await setSession(phoneHash, session);
         return await composeReply({

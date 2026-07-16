@@ -75,12 +75,24 @@ For each link the student gives, output { "platform": <clean platform name>, "ur
   },
 
   AWAITING_EDUCATION: {
-    instruction: 'Extract degree, college name, branch/major, and expected year of passing. Examples: degree "B.Tech" or "BCA" or "B.E."; branch "Computer Science", "Mechanical"; year "2026" or "Expected 2026". Use null for any field not stated. Do not invent.',
+    instruction: `Extract degree, college name, branch/major, and expected year of passing. Examples: degree "B.Tech" or "BCA" or "B.E."; branch "Computer Science", "Mechanical", "Data Science"; year "2026" or "Expected 2026". Use null for any field not stated. Do not invent.
+
+MULTI-TURN CONTEXT (CRITICAL): the student is answering across multiple messages. Check the current_resume_json.education[0] above — if a field is ALREADY FILLED there, DO NOT ask for it again. Only ask for genuinely-missing fields.
+
+SUFFICIENCY: once education[0] has BOTH college AND degree (branch and year are nice-to-have but not required to advance), set clarification_needed=null so the flow moves on. Do NOT keep asking for branch or year if the student has given college + degree.`,
     shape: '{ "education": { "degree": string | null, "college": string | null, "branch": string | null, "expected_year": string | null }, "clarification_needed": string | null }',
     merge: (rj, x) => {
+      // CRITICAL: only copy NON-NULL fields. Previous Object.assign wiped
+      // already-collected fields to null on every turn (real bug 2026-07-16:
+      // student gave college on turn 1, degree on turn 2, and the degree-turn
+      // merge overwrote college with null → bot re-asked for college forever).
       if (!rj.education) rj.education = [];
       if (!rj.education[0]) rj.education.push({});
-      Object.assign(rj.education[0], x.education || {});
+      const src = x.education || {};
+      for (const k of Object.keys(src)) {
+        const v = src[k];
+        if (v != null && String(v).trim() !== '') rj.education[0][k] = v;
+      }
     },
   },
 
