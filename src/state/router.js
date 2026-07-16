@@ -466,18 +466,51 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
   // while actively chatting.
   bumpUserActivity(phoneHash);
 
-  // --- Universal 2-skip escape hatch. Per Meet 2026-07-16: if a student
-  // types skip / nahi / abhi nahi / any decline TWICE on the same question,
-  // move on — irrespective of whether the field is required. Missing info
-  // can always be added later via "edit" post-generation. Never trap the
-  // student in a loop just because a required field wasn't parseable.
+  // Helper: clear all Phase 2 sub-state accumulators so a following section
+  // starts clean when we force-advance. A stranded pending_experience /
+  // pending_project would poison the next state's flow (e.g. the projects
+  // handler would think there's a half-filled experience to complete).
+  function clearAllPendingSubstates(s) {
+    s.pending_experience = null;
+    s.exp_focus = null;
+    s.exp_more_pending = false;
+    s.exp_missing_focus_asked = false;
+    s.pending_project = null;
+    s.proj_focus = null;
+    s.projects_more_pending = false;
+    s.pending_por = null;
+    s.por_more_pending = false;
+    s.pending_cert = null;
+    s.cert_link_pending = null;
+    s.cert_extract_pending = null;
+    s.certs_more_pending = false;
+    s.achievements_more_pending = false;
+  }
+
+  // --- Universal loop-breakers. Two independent escape hatches, both at the
+  // top of the handler so they apply BEFORE any state-specific logic (including
+  // multi-entry sub-state handlers for experience/projects/POR/certs/achievements
+  // that live earlier in this file). This is the SAFETY GUARANTEE promised to
+  // Meet 2026-07-16: no student can ever be trapped in a loop, whether they
+  // actively type skip or just keep trying earnestly.
   //
-  // Consecutive tracking: streak resets to 1 on the FIRST skip in a new
-  // state, +1 on each subsequent skip in the SAME state, back to 0 on any
-  // non-skip input. This lets a student who typed "skip" once, answered
-  // partially, then said "skip" again NOT trigger an accidental force-skip.
+  // Hatch 1 — 2-skip streak: student types decline/skip TWICE in a row in the
+  //   same state. Explicit user intent to move on.
+  //
+  // Hatch 2 — turn count: student has been in the SAME state for N+ turns
+  //   without state changing. Signals the LLM keeps returning clarification_needed
+  //   or the merge isn't accumulating. Thresholds tuned to be generous:
+  //     - Required single-field (NAME, EMAIL, EDUCATION, SKILLS): 6 turns
+  //     - Multi-entry (EXPERIENCE, PROJECTS, POR, CERTS, ACHIEVEMENTS): 18 turns
+  //       (a legitimate 3-entry experience can easily hit 12-15 turns; 18 gives
+  //        a real ceiling without punishing rich answers)
+  //     - Optional single (LINKEDIN, GITHUB, CGPA, CODING_PROFILES, COURSEWORK):
+  //       6 turns (should never take more than a few — anything worse is stuck)
+  //   Any missing data can be added post-generation via "edit". Never trap.
   {
     const isSkipLike = SKIP_RE.test(trimmed) || NO_MORE_HINT.test(trimmed) || OPTIONAL_DECLINE_HINT.test(trimmed);
+
+    // Update skip streak.
     if (isSkipLike) {
       if (session.skip_streak_state === session.state) {
         session.skip_streak = (session.skip_streak || 0) + 1;
@@ -490,32 +523,45 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
       session.skip_streak_state = null;
     }
 
-    // Escape hatch fires only for Phase 2 collection states (the ones with
-    // extraction questions). DELIVERED / AWAITING_EDIT_OR_DONE / payment
-    // states don't extract data and shouldn't be "skipped" this way.
-    if (isSkipLike && session.skip_streak >= 2 && PHASE_2_STATES.has(session.state)) {
+    // Update turn count (resets when state changes; increments when it doesn't).
+    if (session.turn_count_state === session.state) {
+      session.turn_count = (session.turn_count || 0) + 1;
+    } else {
+      session.turn_count = 1;
+      session.turn_count_state = session.state;
+    }
+
+    // Determine turn-count threshold per state class.
+    const MULTI_ENTRY_STATES = new Set([
+      STATES.AWAITING_EXPERIENCE,
+      STATES.AWAITING_PROJECTS,
+      STATES.AWAITING_POR,
+      STATES.AWAITING_CERTS,
+      STATES.AWAITING_ACHIEVEMENTS,
+    ]);
+    let turnLimit = 6;
+    if (MULTI_ENTRY_STATES.has(session.state)) turnLimit = 18;
+
+    const skipHatchFired = isSkipLike && session.skip_streak >= 2 && PHASE_2_STATES.has(session.state);
+    const turnHatchFired = session.turn_count >= turnLimit && PHASE_2_STATES.has(session.state);
+
+    if (skipHatchFired || turnHatchFired) {
       const stuckState = session.state;
-      // Clear any half-filled sub-state markers so the next section starts
-      // clean. A stranded pending_experience / pending_project would poison
-      // the following state's flow.
-      session.pending_experience = null;
-      session.exp_focus = null;
-      session.exp_more_pending = false;
-      session.exp_missing_focus_asked = false;
-      session.pending_project = null;
-      session.proj_focus = null;
-      session.projects_more_pending = false;
-      session.pending_por = null;
-      session.por_more_pending = false;
-      session.pending_cert = null;
-      session.cert_link_pending = null;
-      session.cert_extract_pending = null;
-      session.certs_more_pending = false;
-      session.achievements_more_pending = false;
+      clearAllPendingSubstates(session);
       session.state = NEXT_STATE[stuckState] || session.state;
       session.skip_streak = 0;
       session.skip_streak_state = null;
-      logger.warn({ phoneHash: phoneHash.slice(0, 12), stuckState, next: session.state }, 'universal 2-skip escape hatch fired');
+      session.turn_count = 1;
+      session.turn_count_state = session.state;
+      logger.warn(
+        {
+          phoneHash: phoneHash.slice(0, 12),
+          stuckState,
+          next: session.state,
+          reason: skipHatchFired ? 'skip_streak_2' : 'turn_count_' + turnLimit,
+        },
+        'universal loop-breaker fired',
+      );
       const genReply = await tryGenerate(session, phoneFrom, phoneHash);
       await setSession(phoneHash, session);
       return genReply || pickPrompt(session.state, session);
@@ -1159,29 +1205,6 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
     // catches AWAITING_COURSEWORK "nothing else", etc. — without it, the
     // extractor returns empty and the section loops on its clarification.
     if (optional && (SKIP_RE.test(trimmed) || NO_MORE_HINT.test(trimmed) || OPTIONAL_DECLINE_HINT.test(trimmed))) {
-      session.state = NEXT_STATE[current];
-      const genReply = await tryGenerate(session, phoneFrom, phoneHash);
-      await setSession(phoneHash, session);
-      return genReply || pickPrompt(session.state, session);
-    }
-
-    // Turn-count safety valve. Applies to REQUIRED single-field Phase 2
-    // states only (multi-entry and optional states have their own handlers).
-    // If we've had 6+ back-and-forths on a single required field, something's
-    // upstream-broken (LLM confused, unparseable input, or a merge bug).
-    // Force-advance rather than trap. The universal 2-skip escape hatch at
-    // the top of handleInner is the PRIMARY exit; this is just belt-and-
-    // suspenders for the "student keeps trying earnestly but LLM misreads it"
-    // pathology.
-    if (session.last_phase2_state !== current) {
-      session.last_phase2_state = current;
-      session.phase2_turns = 1;
-    } else {
-      session.phase2_turns = (session.phase2_turns || 0) + 1;
-    }
-    const isRequiredSingleField = !optional && current !== STATES.AWAITING_JD;
-    if (isRequiredSingleField && session.phase2_turns >= 6) {
-      logger.warn({ phoneHash: phoneShort, state: current, turns: session.phase2_turns }, 'force-advance: turn-count safety valve');
       session.state = NEXT_STATE[current];
       const genReply = await tryGenerate(session, phoneFrom, phoneHash);
       await setSession(phoneHash, session);

@@ -71,7 +71,29 @@ For each link the student gives, output { "platform": <clean platform name>, "ur
 - A student may give several — return all of them. A student may also give only a count without a link (e.g. "solved 500 on leetcode") — still capture it with url null and stat set.
 - If the message is "skip", empty, or contains no recognizable coding-profile, return an empty array. Do NOT invent or guess a profile URL, and do NOT ask follow-up questions here — this step is optional.`,
     shape: '{ "coding_profiles": [{ "platform": string, "url": string | null, "stat": string | null }], "clarification_needed": string | null }',
-    merge: (rj, x) => { rj.coding_profiles = Array.isArray(x.coding_profiles) ? x.coding_profiles.filter((c) => c && c.platform && (c.url || c.stat)) : []; },
+    // Merge by platform (case-insensitive). Previous version REPLACED the whole
+    // array every turn, so a student who said "leetcode 500" on turn 1 then
+    // added "codeforces 1600" on turn 2 lost the leetcode entry. Same bug class
+    // as education merge (fixed 2026-07-16).
+    merge: (rj, x) => {
+      const incoming = Array.isArray(x.coding_profiles)
+        ? x.coding_profiles.filter((c) => c && c.platform && (c.url || c.stat))
+        : [];
+      if (!Array.isArray(rj.coding_profiles)) rj.coding_profiles = [];
+      const key = (p) => String(p).trim().toLowerCase();
+      const byPlatform = new Map(rj.coding_profiles.map((c) => [key(c.platform), c]));
+      for (const c of incoming) {
+        const k = key(c.platform);
+        if (byPlatform.has(k)) {
+          const existing = byPlatform.get(k);
+          if (c.url && !existing.url) existing.url = c.url;
+          if (c.stat && !existing.stat) existing.stat = c.stat;
+        } else {
+          rj.coding_profiles.push(c);
+          byPlatform.set(k, c);
+        }
+      }
+    },
   },
 
   AWAITING_EDUCATION: {
@@ -97,7 +119,17 @@ SUFFICIENCY: once education[0] has BOTH college AND degree (branch and year are 
   },
 
   AWAITING_CGPA: {
-    instruction: 'Extract the academic score. Could be CGPA ("8.5", "9.2/10") or percentage ("85%"). Keep the original format the student used.',
+    instruction: `Extract the academic score. Could be CGPA ("8.5", "9.2/10") or percentage ("85%"). Keep the original format the student used.
+
+DECLINE HANDLING (CRITICAL — CGPA is OPTIONAL). Many freshers are between semesters, don't want to share, or just don't have a current score. If the message shows ANY sign of decline / deferral — English or Hinglish or short-form — set cgpa=null AND clarification_needed=null so the flow ADVANCES. Do NOT ask again, do NOT offer to wait, do NOT say "when you have it".
+Decline examples that MUST return {cgpa:null, clarification_needed:null}:
+- "skip", "no", "nahi", "nope", "none"
+- "abhi nahi", "abhi results ni aaye", "results pending", "still awaiting", "1st sem hai", "abhi tak nahi mila"
+- "later", "baad me batungi", "next time", "for now"
+- "don't want to share", "share nahi karna", "personal", "nahi bataunga"
+- "N/A", "not applicable", "haven't calculated"
+
+ONLY set clarification_needed when the message is truly ambiguous (a bare "?" / "kya" / "matlab") — never for a decline or deferral.`,
     shape: '{ "cgpa": string | null, "clarification_needed": string | null }',
     merge: (rj, x) => {
       if (!rj.education) rj.education = [];
@@ -117,7 +149,14 @@ LIBERAL ACCEPTANCE — NEVER GATEKEEP. Anything the student types that names a c
 - Mixed lists: "Tools - power bi, eda" or "Prompt engineering, FastAPI, LangChain"
 Title-case each item where reasonable. Preserve the student's separator if any. Comma-join if they used line breaks. Do NOT ask for "specific coursework" — whatever they said IS the coursework. The friend-test 2026-06-25 looped on "Fast API" being rejected — never reject a topic just because it isn't on a canonical academic-course list.
 
-ONLY set clarification_needed if the message is genuinely empty / "skip" / a question / gibberish. If "skip"/"no"/"nahi"/"none" → coursework: null, clarification_needed: null (the optional state handler advances).`,
+DECLINE HANDLING (CRITICAL — COURSEWORK is OPTIONAL): if the student declines or defers, set coursework=null AND clarification_needed=null so the flow ADVANCES. Never re-ask.
+Decline examples that MUST return {coursework:null, clarification_needed:null}:
+- "skip", "no", "nahi", "nope", "none", "kuch nahi"
+- "abhi nahi", "yaad nahi", "yaad ni", "don't remember", "pata nahi", "no specific coursework"
+- "later", "baad me", "next time", "for now"
+- Empty / whitespace-only replies
+
+ONLY set clarification_needed if the message is truly ambiguous (a bare "?" / "kya matlab"). Never for a decline.`,
     shape: '{ "coursework": string | null, "clarification_needed": string | null }',
     merge: (rj, x) => {
       if (!x.coursework) return;
@@ -152,7 +191,33 @@ HARD RULES ON LABELS:
 THIS IS A SIMPLE LIST STEP — DO NOT INTERROGATE.
 Set clarification_needed to null whenever the message contains AT LEAST ONE skill (it almost always does). A short list IS complete and sufficient. NEVER ask for metrics, impact, proficiency levels, years of experience, examples, or "more" skills — that judgement happens later in the experience/projects steps, never here. Only set clarification_needed (a brief, friendly ask for their skills) if the message contains NO skills at all — e.g. it is empty, "skip", a question, or gibberish.`,
     shape: '{ "skills": [{ "category": string, "items": [string] }], "clarification_needed": string | null }',
-    merge: (rj, x) => { rj.skills = Array.isArray(x.skills) ? x.skills.filter((c) => c && c.category && Array.isArray(c.items) && c.items.length) : []; },
+    // Merge by category label (case-insensitive), dedupe items case-insensitively.
+    // Previous REPLACE-every-turn wiped skills when a student added more on a
+    // follow-up ("also add Tableau and Power BI" → wiped Python + SQL). Same
+    // bug class as education merge (fixed 2026-07-16).
+    merge: (rj, x) => {
+      const incoming = Array.isArray(x.skills)
+        ? x.skills.filter((c) => c && c.category && Array.isArray(c.items) && c.items.length)
+        : [];
+      if (!Array.isArray(rj.skills)) rj.skills = [];
+      const key = (s) => String(s).trim().toLowerCase();
+      const byCategory = new Map(rj.skills.map((c) => [key(c.category), c]));
+      for (const cat of incoming) {
+        const k = key(cat.category);
+        if (byCategory.has(k)) {
+          const existing = byCategory.get(k);
+          existing.items = existing.items || [];
+          const seen = new Set(existing.items.map(key));
+          for (const item of cat.items) {
+            const ik = key(item);
+            if (ik && !seen.has(ik)) { existing.items.push(item); seen.add(ik); }
+          }
+        } else {
+          rj.skills.push({ category: cat.category, items: [...cat.items] });
+          byCategory.set(k, rj.skills[rj.skills.length - 1]);
+        }
+      }
+    },
   },
 
   // EXPERIENCE — multi-bullet, multi-angle sufficiency. Drives bullet density.
