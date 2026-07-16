@@ -51,8 +51,14 @@ function renderMetrics(m) {
   const row = (label, n, base) =>
     `<tr><td>${esc(label)}</td><td class="num">${n}</td><td class="bar"><span style="width:${pct(n, base)}%"></span></td><td class="num pct">${pct(n, base)}%</td></tr>`;
 
+  // Force IST for every timestamp on this page. Railway runs UTC by default,
+  // so `toLocaleString('en-IN')` alone gets the en-IN format (dd/mm/yyyy) but
+  // keeps the server's UTC clock — off by 5h30m for anyone watching from India.
+  const IST = { timeZone: 'Asia/Kolkata', dateStyle: 'short', timeStyle: 'medium' };
+  const fmtIst = (d) => new Date(d).toLocaleString('en-IN', IST);
+
   const recent = m.recent.map((r) =>
-    `<tr><td>${esc(r.event_name)}</td><td>${esc(r.state || '')}</td><td class="ts">${esc(new Date(r.at).toLocaleString('en-IN'))}</td></tr>`
+    `<tr><td>${esc(r.event_name)}</td><td>${esc(r.state || '')}</td><td class="ts">${esc(fmtIst(r.at))}</td></tr>`
   ).join('');
 
   // "LIVE NOW" card: bright accent + pulse when someone is actively chatting.
@@ -86,7 +92,7 @@ function renderMetrics(m) {
   .ts{color:#8b929c;font-size:12px;white-space:nowrap}
 </style></head><body><div class="wrap">
 <h1>Bharat Resume — launch metrics</h1>
-<p class="sub">${m.eventTotal} events tracked · refreshed ${esc(new Date().toLocaleString('en-IN'))} · auto-refresh 30s</p>
+<p class="sub">${m.eventTotal} events tracked · refreshed ${esc(fmtIst(new Date()))} IST · auto-refresh 30s</p>
 
 <div class="cards">
   <div class="${liveCls}">
