@@ -55,7 +55,13 @@ function renderMetrics(m) {
     `<tr><td>${esc(r.event_name)}</td><td>${esc(r.state || '')}</td><td class="ts">${esc(new Date(r.at).toLocaleString('en-IN'))}</td></tr>`
   ).join('');
 
+  // "LIVE NOW" card: bright accent + pulse when someone is actively chatting.
+  // Auto-refreshes the whole page every 30s via <meta http-equiv="refresh"> so
+  // the dashboard reflects reality without needing an F5 during broadcast.
+  const liveN = m.activeNow || 0;
+  const liveCls = liveN > 0 ? 'card live pulse' : 'card live';
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta http-equiv="refresh" content="30">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bharat Resume — metrics</title>
 <style>
@@ -65,6 +71,12 @@ function renderMetrics(m) {
   .cards{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:28px}
   .card{flex:1 1 120px;background:#1a1d24;border:1px solid #262b34;border-radius:10px;padding:14px}
   .card .k{color:#8b929c;font-size:12px} .card .v{font-size:26px;font-weight:600;margin-top:4px}
+  .card.live{flex:1 1 100%;background:linear-gradient(135deg,#16281a 0%,#1a2d1e 100%);border-color:#2f6f3a}
+  .card.live .k{color:#8fd39a;font-weight:600;letter-spacing:.5px;text-transform:uppercase}
+  .card.live .v{font-size:38px;color:#c1f0cc}
+  .card.live .sub2{color:#8fd39a;font-size:12px;margin-top:2px}
+  .card.live.pulse .dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#4ade80;margin-right:8px;vertical-align:middle;animation:pulse 1.6s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(74,222,128,.7)}50%{opacity:.6;box-shadow:0 0 0 8px rgba(74,222,128,0)}}
   h2{font-size:14px;text-transform:uppercase;letter-spacing:.5px;color:#8b929c;margin:24px 0 8px}
   table{width:100%;border-collapse:collapse;background:#1a1d24;border:1px solid #262b34;border-radius:10px;overflow:hidden}
   td,th{padding:9px 12px;border-bottom:1px solid #262b34;text-align:left;font-size:14px}
@@ -74,7 +86,15 @@ function renderMetrics(m) {
   .ts{color:#8b929c;font-size:12px;white-space:nowrap}
 </style></head><body><div class="wrap">
 <h1>Bharat Resume — launch metrics</h1>
-<p class="sub">${m.eventTotal} events tracked · refreshed ${esc(new Date().toLocaleString('en-IN'))}</p>
+<p class="sub">${m.eventTotal} events tracked · refreshed ${esc(new Date().toLocaleString('en-IN'))} · auto-refresh 30s</p>
+
+<div class="cards">
+  <div class="${liveCls}">
+    <div class="k">${liveN > 0 ? '<span class="dot"></span>' : ''}Live people using right now</div>
+    <div class="v">${liveN}</div>
+    <div class="sub2">Active in the last ${m.liveWindowMinutes || 5} minutes</div>
+  </div>
+</div>
 
 <div class="cards">
   <div class="card"><div class="k">Students</div><div class="v">${m.users}</div></div>

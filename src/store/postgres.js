@@ -45,9 +45,17 @@ async function insertEvent({ userId, eventName, state, payload }) {
 async function fetchMetrics() {
   const db = getClient();
 
-  const [{ count: users }, { count: paidUsers }] = await Promise.all([
+  // "Live now" = students whose last_active_at is within the last 5 min. Uses
+  // the users table's last_active_at (bumped on every upsertUser call, i.e. every
+  // inbound message that touches the state machine) so an idle 24h-TTL session
+  // that hasn't had a new message isn't counted as "live".
+  const liveWindowMs = 5 * 60 * 1000;
+  const liveCutoff = new Date(Date.now() - liveWindowMs).toISOString();
+
+  const [{ count: users }, { count: paidUsers }, { count: activeNow }] = await Promise.all([
     db.from('users').select('*', { count: 'exact', head: true }),
     db.from('users').select('*', { count: 'exact', head: true }).eq('paid', true),
+    db.from('users').select('*', { count: 'exact', head: true }).gt('last_active_at', liveCutoff),
   ]);
 
   const { data: events, error } = await db
@@ -89,6 +97,8 @@ async function fetchMetrics() {
   return {
     users: users || 0,
     paidUsers: paidUsers || 0,
+    activeNow: activeNow || 0,
+    liveWindowMinutes: 5,
     funnel: {
       session_started: counts.session_started || 0,
       resume_delivered: delivered,
