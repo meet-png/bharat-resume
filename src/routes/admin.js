@@ -65,6 +65,7 @@ function renderMetrics(m) {
   // Auto-refreshes the whole page every 30s via <meta http-equiv="refresh"> so
   // the dashboard reflects reality without needing an F5 during broadcast.
   const liveN = m.activeNow || 0;
+  const recentN = m.recentlyActive || 0;
   const liveCls = liveN > 0 ? 'card live pulse' : 'card live';
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta http-equiv="refresh" content="30">
@@ -98,7 +99,7 @@ function renderMetrics(m) {
   <div class="${liveCls}">
     <div class="k">${liveN > 0 ? '<span class="dot"></span>' : ''}Live people using right now</div>
     <div class="v">${liveN}</div>
-    <div class="sub2">Active in the last ${m.liveWindowMinutes || 5} minutes</div>
+    <div class="sub2">Actively chatting · last ${m.liveWindowMinutes || 3} min · in-conversation total: ${recentN} (last ${m.recentWindowMinutes || 15} min)</div>
   </div>
 </div>
 

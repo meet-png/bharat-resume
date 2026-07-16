@@ -43,4 +43,22 @@ async function logEvent({ phoneHash, eventName, state = null, payload = null, us
   }
 }
 
-module.exports = { logEvent, EVENT_NAMES };
+// Bump users.last_active_at on every inbound message — WITHOUT writing an
+// event row. logEvent above only fires for milestone events (session_started,
+// resume_delivered, edit_requested, payment_*), so a student in the middle of
+// Phase 2 Q&A (name/email/education/skills/etc.) has NO event during that
+// stretch and the LIVE-now dashboard drops them off after 5 min even though
+// they're actively chatting. This helper is the accurate signal: it bumps
+// activity time without polluting the events table with "message_received"
+// noise. Fire-and-forget; never blocks the reply, never throws.
+async function bumpUserActivity(phoneHash) {
+  if (config.NODE_ENV === 'test') return;
+  if (!phoneHash) return;
+  try {
+    await upsertUser(phoneHash, {});
+  } catch (e) {
+    logger.warn({ err: e.message }, 'bumpUserActivity failed (non-fatal)');
+  }
+}
+
+module.exports = { logEvent, bumpUserActivity, EVENT_NAMES };

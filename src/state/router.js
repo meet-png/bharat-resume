@@ -9,7 +9,7 @@ const { applyEdit } = require('../llm/edit');
 const { respond } = require('../llm/respond');
 const { scoreResume, suggestionsFor } = require('../resume/ats_score');
 const { getSession, setSession, checkRateLimit, acquirePhoneLock, releasePhoneLock, RATELIMIT_MAX } = require('../store/redis');
-const { logEvent } = require('../telemetry/events');
+const { logEvent, bumpUserActivity } = require('../telemetry/events');
 const { config } = require('../config');
 const logger = require('../logger');
 
@@ -458,6 +458,13 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
   // Persist the WhatsApp address (server-side only, private Redis) so the
   // post-payment webhook can push the clean PDF outbound. Never logged/exposed.
   if (phoneFrom) session.phone_from = phoneFrom;
+
+  // Bump users.last_active_at fire-and-forget on EVERY inbound message so
+  // the LIVE-now dashboard count reflects actual real-time activity, not
+  // just milestone events. Without this, a student mid Phase-2 Q&A (which
+  // fires no logEvent) drops off the "live" count after N minutes even
+  // while actively chatting.
+  bumpUserActivity(phoneHash);
 
   // --- Universal 2-skip escape hatch. Per Meet 2026-07-16: if a student
   // types skip / nahi / abhi nahi / any decline TWICE on the same question,
