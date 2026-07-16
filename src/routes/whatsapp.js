@@ -92,6 +92,24 @@ async function processInbound(msg) {
   const body = (msg.type === 'text' && msg.text && msg.text.body) || '';
   logger.info({ from: shortHash(phoneHash), bodyLen: body.length, type: msg.type }, 'inbound whatsapp (meta)');
 
+  // Non-text messages (document / image / audio / video / sticker / etc.):
+  // students frequently send their existing resume PDF/DOCX/photo hoping we'll
+  // rate or modify it. We don't do that — only NEW resume generation. Refuse
+  // formally and point them at the chat flow. Do NOT run the state machine
+  // for these; an empty text body would either short-circuit or produce a
+  // confusing generic response. Handle here at the transport boundary.
+  if (msg.type !== 'text') {
+    logger.info({ from: shortHash(phoneHash), type: msg.type }, 'non-text message refused (attachment)');
+    await sendWhatsApp({
+      to: phoneFrom,
+      body:
+        'Namaste 🙏 File / photo / voice note nahi le sakta abhi.\n\n' +
+        'Ye bot sirf *naya resume BANATA* hai — existing resume ko rate, score, ya modify karne ka option nahi hai.\n\n' +
+        'Naya banane ke liye, chat me apne details type kariye. Type "reset" if you want to start fresh.',
+    });
+    return;
+  }
+
   let reply;
   try {
     reply = await handle({ phoneHash, body, phoneFrom });

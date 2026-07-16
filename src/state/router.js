@@ -54,6 +54,28 @@ const JD_MARKER_RE = /\b(responsibilit|requirement|qualification|years? of exper
 const URL_RE = /^https?:\/\//i;
 const SHOW_RE = /^\s*show\s*me\s*$/i;
 const RESET_RE = /^\s*reset\s*$/i;
+// Student wants us to RATE / REVIEW / SCORE / MODIFY / IMPROVE an EXISTING
+// resume (they had before this conversation). We only GENERATE new resumes —
+// evaluate/rewrite of an uploaded resume isn't in scope. Fire this at the very
+// top of the handler so the refusal is consistent across ANY state (including
+// DELIVERED / PAID_COMPLETE where "rate my resume" might otherwise slip past
+// the state-specific handlers).
+//
+// Deliberately narrow — matches only clear intent patterns:
+//   "rate my resume", "review my existing resume", "score karo mera resume",
+//   "resume rate karo", "roast my CV", "mera resume kaisa hai",
+//   "improve my current resume", "modify my old resume"
+// Does NOT match: bare "edit" (that's the post-generation edit flow), or
+// generic "help me with resume" (which routes into the normal Q&A).
+// Two alternations, connected via nearby-token proximity (up to 30 chars):
+//   (a) verb → ... → resume-noun    (rate my resume, review my current CV)
+//   (b) resume-noun → ... → verb    (resume rate karo, CV review kar do)
+// Deliberately covers both English and Hinglish surface forms. Excludes "edit"
+// so the post-generation edit flow (EDIT_RE) is unaffected.
+const REVIEW_EXISTING_RE = /\b(rate|review|score|roast|grade|critique|analy[sz]e|evaluate|improve|modify|rewrite|polish|fix|enhance|update|check)\b[^\n]{0,30}\b(resume|cv|profile)\b|\b(resume|cv|profile)\b[^\n]{0,30}\b(rate|score|review|roast|grade|analy[sz]e|check|evaluate|dekho|dekh|kaisa|kaisi)\b/i;
+const REFUSE_EXISTING_MSG =
+  'Namaste 🙏 Ye bot sirf *naya resume BANATA* hai — existing resume ko rate, score, review, ya modify karne ka option abhi nahi hai.\n\n' +
+  'Naya resume banane ke liye chat continue kariye, ya "reset" likhkar fresh start kariye.';
 const PAY_RE = /^\s*(pay|pay now|unlock|buy|purchase|₹?\s*49|haan pay)\s*$/i;
 const EDIT_RE = /^\s*(edit|edits|change|changes)\s*$/i;
 // Post-PDF rating micro-survey (added 2026-07-14). Matches "5", "4/5",
@@ -475,6 +497,15 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
     fresh.state = STATES.AWAITING_CONFIRM_START;
     await setSession(phoneHash, fresh);
     return pickMessage('reset') + '\n\n' + pickPrompt(STATES.NEW);
+  }
+
+  // Guardrail: student is asking us to rate/review/modify an EXISTING resume
+  // they had before this conversation. Refuse formally and point them at the
+  // "generate new" flow. Fires before any state-specific handler so it's
+  // consistent across NEW / mid-flow / DELIVERED / PAID_COMPLETE.
+  if (REVIEW_EXISTING_RE.test(trimmed)) {
+    logger.info({ phoneHash: phoneHash.slice(0, 12), state: (await getSession(phoneHash))?.state || 'NEW' }, 'refuse: existing-resume review request');
+    return REFUSE_EXISTING_MSG;
   }
 
   let session = await getSession(phoneHash);
