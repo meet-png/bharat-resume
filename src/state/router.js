@@ -32,6 +32,16 @@ const DONE_RE = /^\s*(done|finish|finished|bas|over|complete)\s*$/i;
 // permissive on PURPOSE — applied only in the "more?" context, where any
 // decline form should advance, never loop.
 const NO_MORE_HINT = /\b(i don'?t have any|don'?t have any|i don'?t have|no more|nothing else|nothing more|that'?s all|that is all|nahi koi|koi nahi|nahi hai|nahi bhai|aur nahi|kuch nahi)\b/i;
+// Broader Hinglish decline used ONLY for OPTIONAL states. Catches natural
+// "can't share right now" / "will tell later" phrasings that SKIP_RE
+// (exact-word) and NO_MORE_HINT ("I don't have any") both miss.
+// Real-world trigger 2026-07-16: student typed "M abhi share ni krskti"
+// (can't share right now) on LinkedIn — LLM interpreted as "will share
+// later" and held state, question re-asked in a loop until she gave up.
+// Deliberately optional-only: for REQUIRED fields (name/email/education),
+// a fuzzy decline still needs LLM classification so we don't accidentally
+// skip past a mandatory field.
+const OPTIONAL_DECLINE_HINT = /\b(skip|abhi nahi|abhi nhi|abhi ni|abhi share|share nahi|share nhi|share ni|nahi kar sak\w*|nahi kr sak\w*|nahin kar sak\w*|ni kr sak\w*|ni kar sak\w*|nhi kar sak\w*|nahi krskt\w*|ni krskt\w*|nhi krskt\w*|nahi de sak\w*|ni de sak\w*|nhi de sak\w*|nahi bat\w+|ni bat\w+|nhi bat\w+|baad me|baad mein|later bat\w+|later tell|tell later|next time|not right now|not now|for now|can'?t share|cannot share|can'?t give|cannot give|dont wanna share|don'?t wanna share|don'?t want to share|dont want to share)\b/i;
 // Student explicitly declining to share a cert verification link.
 const NOLINK_RE = /\b(no link|skip link|nolink|no url|without link|no verification|link nahi|nahi link|link nahin|private)\b/i;
 // A URL or bare domain (with path) anywhere in the message — used to pull a
@@ -1085,7 +1095,7 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
     // SKIP / natural-language decline advances optional sections. This is what
     // catches AWAITING_COURSEWORK "nothing else", etc. — without it, the
     // extractor returns empty and the section loops on its clarification.
-    if (optional && (SKIP_RE.test(trimmed) || NO_MORE_HINT.test(trimmed))) {
+    if (optional && (SKIP_RE.test(trimmed) || NO_MORE_HINT.test(trimmed) || OPTIONAL_DECLINE_HINT.test(trimmed))) {
       session.state = NEXT_STATE[current];
       const genReply = await tryGenerate(session, phoneFrom, phoneHash);
       await setSession(phoneHash, session);

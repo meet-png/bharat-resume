@@ -31,13 +31,31 @@ ONLY set name=null and ask a clarification if the input is clearly NOT a name: a
   },
 
   AWAITING_LINKEDIN: {
-    instruction: 'Extract the LinkedIn profile URL. Accept variants like "linkedin.com/in/foo" — normalize to full "https://linkedin.com/in/foo". If "skip" or no link, set to null.',
+    instruction: `Extract the LinkedIn profile URL. Accept variants like "linkedin.com/in/foo" — normalize to full "https://linkedin.com/in/foo".
+
+DECLINE HANDLING (CRITICAL — LinkedIn is OPTIONAL). If the message shows ANY sign that the student doesn't want to / can't share right now — English or Hinglish or short-form — set linkedin=null AND clarification_needed=null so the flow ADVANCES. Do NOT ask again, do NOT offer to wait, do NOT say "share when you can". Advance the flow.
+Decline examples that MUST return {linkedin:null, clarification_needed:null}:
+- "skip", "no", "nahi", "nope", "none"
+- "abhi nahi", "abhi share ni krskti", "share nahi kar sakti", "share nahin kar sakta", "later batungi", "baad me batungi", "next time"
+- "don't have", "nahi hai", "koi nahi", "not on linkedin", "linkedin nahi hai"
+- "can't share right now", "not right now", "later", "abhi ni"
+
+ONLY set clarification_needed when the student's message is truly ambiguous (e.g. a bare "?", "kya", "matlab") — never for a decline.`,
     shape: '{ "linkedin": string | null, "clarification_needed": string | null }',
     merge: (rj, x) => { rj.linkedin = x.linkedin || null; },
   },
 
   AWAITING_GITHUB: {
-    instruction: 'Extract the GitHub profile URL. Accept "github.com/foo" — normalize to "https://github.com/foo". If "skip", set to null.',
+    instruction: `Extract the GitHub profile URL. Accept "github.com/foo" — normalize to "https://github.com/foo".
+
+DECLINE HANDLING (CRITICAL — GitHub is OPTIONAL). If the message shows ANY sign that the student doesn't want to / can't share right now — English or Hinglish or short-form — set github=null AND clarification_needed=null so the flow ADVANCES. Do NOT ask again, do NOT offer to wait, do NOT say "share when you can". Advance the flow.
+Decline examples that MUST return {github:null, clarification_needed:null}:
+- "skip", "no", "nahi", "nope", "none"
+- "abhi nahi", "abhi share ni krskti", "share nahi kar sakti", "later batungi", "baad me", "next time"
+- "don't have", "nahi hai", "koi nahi", "github nahi hai", "not on github"
+- "can't share right now", "not right now", "later"
+
+ONLY set clarification_needed when the student's message is truly ambiguous — never for a decline.`,
     shape: '{ "github": string | null, "clarification_needed": string | null }',
     merge: (rj, x) => { rj.github = x.github || null; },
   },
