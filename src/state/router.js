@@ -74,10 +74,25 @@ const EXP_SLOT_REASK_RE = /\b(role|designation|company|organi[sz]ation|kaha|kaha
 // Bullet safety cap: if we already have this many bullets, advance regardless of
 // the LLM's sufficiency clarification so the step can never loop forever.
 const EXP_BULLET_CAP = 3;
+// Dates format: must contain a real month+year window, not just a duration.
+// Real-world bug 2026-07-17 (Meet's live test): student wrote "Razorpay me
+// 6 mahine intern tha…" — LLM extracted dates="6 mahine". Router accepted it
+// (truthy) and shipped a resume that said "Razorpay | 6 mahine" — a recruiter
+// would reject that instantly. Any 4-digit year (19XX or 20XX) OR the token
+// "present/current/ongoing/now" counts as a real date signal; anything else
+// (durations like "6 months", "6 mahine", "few months") does not.
+const VALID_DATES_RE = /\b(19|20)\d{2}\b|\b(present|current|ongoing|abhi|abhi tak)\b/i;
 
 function experienceHardMissing(exp) {
   if (!exp) return [...EXP_HARD_SLOTS];
-  return EXP_HARD_SLOTS.filter((k) => !exp[k]);
+  const missing = EXP_HARD_SLOTS.filter((k) => !exp[k]);
+  // Extra check: dates field is truthy but doesn't contain a year or
+  // present-marker → student gave a duration ("6 mahine"), not a real date.
+  // Treat as missing so expSlotQuestion asks specifically for month+year.
+  if (!missing.includes('dates') && exp.dates && !VALID_DATES_RE.test(String(exp.dates))) {
+    missing.push('dates');
+  }
+  return missing;
 }
 
 function classifyJdInput(text) {

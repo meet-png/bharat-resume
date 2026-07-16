@@ -224,6 +224,15 @@ Set clarification_needed to null whenever the message contains AT LEAST ONE skil
   AWAITING_EXPERIENCE: {
     instruction: `Extract internship/job experience. tech_stack = the specific tools / libraries / methods the student actually used in THIS experience (not their global skills).
 
+DATES FORMAT (CRITICAL — resume-grade only):
+- The dates field MUST be a real month+year range or a bare year — anything a recruiter would accept on a resume. Examples that ARE valid: "May 2024 - Jul 2024", "Jan 2024 - Present", "May-Jul 2024", "2023-2024", "2024".
+- A DURATION is NEVER a valid dates value. If the student writes "6 months", "6 mahine", "few months", "kuch mahine", "1 saal", "3 hafte" — dates is UNKNOWN. Set dates=null and put a clarification asking for the exact start and end months: "Kab se kab tak thi — start aur end month+year batayiye (jaise 'Jan 2024 - Jul 2024')?"
+- Never guess a year the student didn't give.
+
+ROLE SPECIFICITY:
+- A bare "Intern" / "Trainee" is weak — infer the domain from the bullets when possible. Student describes API/backend work → "SWE Intern" or "Backend Intern". Student describes dashboards/SQL/data → "Data Analyst Intern". Student describes designs → "Design Intern". Student describes marketing/growth → "Marketing Intern". Only fall back to plain "Intern" when there is genuinely nothing to disambiguate.
+
+
 PRE-CHECK BEFORE ASKING ANYTHING — STOP RE-ASKING FOR DETAIL THE STUDENT ALREADY GAVE:
 Before you set clarification_needed, scan resume_json.experience[0].bullets (the PENDING entry, accumulating across turns). If those bullets ALREADY contain ≥2 distinct numbers / metrics across angles — e.g. "500+ customers", "10 hours saved", "50% accuracy", "₹3 L budget", "12,828 rows", "p99 400ms→120ms" — the entry IS sufficient: set clarification_needed = null. Do NOT ask the student for "impact" or "result" or "metric" when several are already present in pending bullets. The student notices instantly when the bot ignores detail they already gave; that's the friend-test bug from 2026-06-25.
 
@@ -320,13 +329,32 @@ Apply same role-awareness as before: clarification vocabulary, action verbs, exa
     instruction: `Extract ONE project per message. tech_stack = whatever tools/tech/methods/platforms the student used (works for tech AND non-tech roles).
 
 PRE-CHECK BEFORE ASKING ANYTHING — STOP ASKING FOR DETAIL THE STUDENT ALREADY GAVE:
-Before you set clarification_needed, look at resume_json.pending_project — it accumulates across turns. If pending_project.bullets ALREADY contain ≥2 distinct numbers/metrics (row counts like "12,828 rows", percentages like "-8.0% correction" or "87% accuracy", currency like "₹18,310 Cr → ₹4,711 Cr", validation counts like "20/20 checks", table counts like "8-table schema", users/scale/latency/throughput) AND a link is sorted (github_url, demo_url, or _link_declined), the project is SUFFICIENT — set clarification_needed = null. Do NOT ask for "a quantifiable outcome" when several are already present. This is the single most important rule: the student notices instantly when the bot ignores detail they already gave.
+Before you set clarification_needed, look at BOTH the current message AND resume_json.pending_project (which accumulates across turns). Check the UNION of bullets across the pending project + any number+noun pairs in the current message. If that union already contains ≥2 distinct metrics (row counts like "12,828 rows", percentages like "92% accuracy" or "-8.0% correction", currency like "₹3 lakh budget", user/scale/latency/throughput numbers like "500+ users", validation counts like "20/20 checks", table counts like "8-table schema") AND a link is sorted (github_url, demo_url, or _link_declined), the project is SUFFICIENT — set clarification_needed = null.
+
+Do NOT ask for "aur outcome / accuracy / users ka number" when those numbers already appear in the current message or in pending_project.bullets. This is the single most damaging bug: the student says "500+ users, 92% accuracy" in one message; on the NEXT turn (link decline) the bot asks "koi aur outcome — accuracy ya users?" — the student instantly loses trust. If you can see the number in the conversation, treat it as GIVEN.
 
 DEFLECTION HANDLING (Hindi/English):
 If the student replies with a deflection meaning "I already told you" — patterns include "upar dediya", "pehle bola", "already said", "already mentioned", "mentioned above", "see above", "check above", "ek baar bata diya", "bola na", "I told you", "pehle hi bola" — DO NOT ask CASE A ("what did you build") or CASE D again. Re-evaluate pending_project.bullets per the PRE-CHECK above. If a metric is there, accept and set clarification_needed = null. If genuinely nothing quantitative is in pending_project, ask ONCE for a specific metric naming what you can already see ("Aapne <X> kaha tha — uska number kya tha?"), never a generic "what did you build?".
 
 EXTRACTION DENSITY — DO NOT COMPRESS RICH MESSAGES:
 When a single message contains MULTIPLE distinct quantifiable facts (e.g. "12,828 rows, 8-table schema, 20/20 validation, -8.0% correction, ₹18K Cr → ₹4.7K Cr"), extract EACH as its own bullet in the bullets array, preserving the exact numbers. Do NOT merge them into one summary line that loses metrics. Five facts → five bullets (the rewriter will compress later if needed; your job is to capture them all).
+
+CASUAL HINGLISH METRIC MINING (CRITICAL — real bug 2026-07-17):
+Students often bury metrics INSIDE a casual Hinglish sentence, not as bullet-formatted items. You MUST mine EVERY number+noun pair as a separate bullet. Examples of shapes to recognize:
+- "500+ users hain" → bullet: "500+ users"
+- "accuracy 92%" / "92% accuracy thi" → bullet: "92% accuracy"
+- "50K daily transactions handle karte the" → bullet: "50K daily transactions handled"
+- "failures 18% kam kiye" → bullet: "Reduced failures by 18%"
+- "10 hafte me deploy" → bullet: "Deployed in 10 weeks"
+- "₹3 lakh budget" → bullet: "₹3 lakh budget"
+- "3rd rank aayi thi" → bullet: "3rd rank"
+
+WORKED EXAMPLE (Hinglish embedded metrics):
+  Input: "AI chatbot banaya GPT use kiya customer support ke liye 500+ users hain accuracy 92%"
+  Extract: name="AI Chatbot", tech_stack=["GPT","AI"], bullets=["500+ users", "92% accuracy", "Built for customer support"]
+  → 3 bullets across 2 angles (SCALE: 500+ users; QUALITY: 92% accuracy). Link is still missing → CASE C.
+
+If the student's message contains ANY number attached to a noun/outcome, that number belongs in bullets. NEVER discard a metric because the sentence was casual or run-on. The single most damaging bug pattern for us is asking for a metric the student already stated — it makes the bot look like it isn't listening.
 
 
 LIBERAL NAME EXTRACTION:

@@ -425,7 +425,11 @@ function expSlotQuestion(missing) {
   const labels = {
     role: 'aapka role / designation',
     company: 'company ka naam',
-    dates: 'duration (kab se kab tak)',
+    // Explicit format ask: "6 mahine" or "6 months" gets extracted but rejected
+    // by the router (duration ≠ date), so the reprompt has to spell out the
+    // format we need. Real bug 2026-07-17: student wrote "6 mahine intern tha"
+    // → resume rendered "Razorpay | 6 mahine" — recruiter-fail material.
+    dates: 'exact dates — start aur end month+year (jaise "Jan 2024 - Jul 2024", ya "May 2024 - Present")',
   };
   const parts = (missing || []).map((k) => labels[k] || k);
   if (parts.length === 0) return null;

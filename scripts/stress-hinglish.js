@@ -144,6 +144,25 @@ const SCENARIOS = [
     hint: 'company=Razorpay + role/bullets extracted',
   },
   {
+    id: 'EXP-3',
+    label: 'Experience — dates must be month+year, not duration',
+    state: STATES.AWAITING_EXPERIENCE,
+    turns: ['Razorpay me 6 mahine intern tha, API build karta tha'],
+    // Bug 2026-07-17 (Meet's live test): LLM extracted dates="6 mahine",
+    // router accepted, resume rendered "Razorpay | 6 mahine". Fix: LLM
+    // instruction now requires a real month+year window OR sets dates=null
+    // with a clarification. Router-side validator (VALID_DATES_RE) is the
+    // belt-and-suspenders; this test asserts the LLM does the right thing.
+    expect: (rj) => {
+      const e = rj.experience?.[0] || {};
+      // Either dates is null (LLM correctly refused to accept duration) OR
+      // dates contains a real year/present marker (LLM inferred).
+      const validDate = !e.dates || /\b(19|20)\d{2}\b|\b(present|current|ongoing|abhi)\b/i.test(String(e.dates));
+      return validDate;
+    },
+    hint: 'dates is null OR contains year/present — never a bare duration',
+  },
+  {
     id: 'EXP-2',
     label: 'Experience — never worked, skip',
     state: STATES.AWAITING_EXPERIENCE,
@@ -178,6 +197,24 @@ const SCENARIOS = [
       return p.name && /portfolio|site/i.test(p.name);
     },
     hint: 'name preserved, no wipe on link-decline turn',
+  },
+  {
+    id: 'PRJ-3',
+    label: 'Project — casual Hinglish embeds "500+ users hain accuracy 92%" — mine as bullets',
+    state: STATES.AWAITING_PROJECTS,
+    turns: ['AI chatbot banaya GPT use kiya customer support ke liye 500+ users hain accuracy 92%'],
+    // Bug 2026-07-17 (Meet's live test): LLM saw "AI chatbot banaya" as the
+    // primary content and skipped mining the embedded metrics ("500+ users",
+    // "92% accuracy"). Result: bullets=[] → next turn (after link decline)
+    // the bot asked "koi aur outcome — accuracy ya users?" — student
+    // instantly lost trust. Fix: explicit "casual Hinglish metric mining"
+    // block in the instruction with this exact example.
+    expect: (rj) => {
+      const p = rj.pending_project || {};
+      const bullets = (p.bullets || []).join(' | ').toLowerCase();
+      return p.name && bullets.includes('500') && (bullets.includes('92') || bullets.includes('accuracy'));
+    },
+    hint: 'name + bullets containing 500+ users AND 92% accuracy',
   },
 
   // -------- POR (Hinglish natural) --------
