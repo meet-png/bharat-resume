@@ -58,6 +58,53 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 
 ## 3. Session log
 
+### Session — 2026-07-20 → 2026-07-21 (v2 Day 1: rate-mode parse + extract with anchors, Claude Opus 4.7)
+
+**Context:** Pilot done, moving to v2. Rate-mode design decisions locked: ship BEFORE broadcast is done (pilot considered complete); score gating = free glimpse (top 3 issues) + ₹49 for full 8-point report and clean PDF; target role MANDATORY at intake. Branched `feature/v2-rate-mode` off main so v1 stays deployable.
+
+**What Day 1 shipped (`src/rate/`):**
+
+1. **`src/rate/parse.js`** — deterministic 3-layer text extraction, NO LLM.
+   - Layer 1: `pdfjs-dist@6.1.200` (upgraded from 4.0.379 to kill an RCE vuln — malicious PDFs could execute arbitrary JS at parse time, which is our exact attack surface for rate mode). Preserves positional info so we get `source_line` anchors + multi-column detection.
+   - Layer 2 fallback: `pdf-parse@2.4.5` on odd producers.
+   - Layer 3: refuse if word count < 100 (probable image-based PDF) with graceful reason (`no-text-extractable` or `text-too-thin-probably-image-pdf`).
+   - `.docx` via `mammoth@1.12.0`.
+   - Hard belt-and-braces: `isEvalSupported: false` on pdfjs to block font-embedded JS.
+   - Line reconstruction bins items by 2pt y-tolerance, joins with x-gap-aware spacing.
+   - `detectMultiColumn()` flags when >25% of lines contain internal x-gaps exceeding 15% of page width.
+
+2. **`src/rate/extract.js`** — LLM structuring, parsed text → `resume_json`. Two invariants:
+   - **GROUNDED:** prompt hard-codes "never invent"; nulls when absent.
+   - **ANCHORED:** every bullet carries `source_line` (1-indexed pointer into `parsed.lines`). Raw source text NOT duplicated into the JSON — halves output tokens AND makes the anchor un-driftable (raw side IS the source).
+   - Output shape matches v1's `render.js` after `flattenForRender()` — so v1 rendering, watermark, upload, delivery all reuse unchanged.
+   - `sanitizeUrls()` nulls out any URL slot that doesn't parse as http(s). Meet's first live test showed the LLM putting hyperlink display text like `"[GitHub]"` into `github_url` because pdfjs strips underlying hrefs — sanitizer catches this.
+   - `rawForAnchor(parsed.lines, source_line)` is the single point-of-access for downstream audit/verifier to look up the original student wording.
+   - Bumped `maxTokens: 3500 → 8000` after Meet's 610-word resume truncated at 3500.
+
+3. **`scripts/rate-parse.js`** — dev CLI. Prints layer used, word/page counts, multi-column flag, first 8 lines, then LLM extract results with completeness summary, anchor validity check, and full `resume_json` dump.
+
+**Test evidence (Meet's own resumes, both real PDFs):**
+
+| PDF | Layer | Words | Extract time | Cost | Anchors valid |
+|---|---|---|---|---|---|
+| `meet_kabra_resume_.pdf` (615-word dense fresher resume) | pdfjs | 610 | 17.9s | $0.00137 | 100% |
+| `resume (6).pdf` (Aditya, 256-word early-career) | pdfjs | 256 | 7.3s | $0.00064 | 100% |
+
+Aditya's resume had NO college name in the source. Extractor correctly left `college: null` instead of inventing one. This is the "grounded" invariant proved out with the first real test.
+
+**Security (Day 1 wins):**
+- `pdfjs-dist` RCE (CVE-worthy — arbitrary JS execution on malicious PDF) eliminated. This was the show-stopper vuln for rate mode.
+- 6 additional high/critical vulns in transitives (body-parser DoS, brace-expansion DoS, js-yaml quadratic CPU, tar path traversal) patched via `npm audit fix`. `npm audit` now 0 vulnerabilities.
+
+**Day 2 punch list (logged, not blocking):**
+- pdfjs strips hyperlink hrefs — display text only (e.g. "LinkedIn", "[GitHub]"). Day 2/3 fix: merge `page.getAnnotations()` link positions back. Also becomes a scoring signal ("bare LinkedIn text without a URL underneath = ATS-compliance flag").
+- Multi-column detection not yet tested against a Canva 2-column template — needs a fixture.
+- `resume_json.summary` from extractor is the source-verbatim summary; the score/reviewer will critique it. Rewrite comes later in v2 improver pass.
+
+**What's next (Day 2):** Deterministic scorer (`src/rate/score.js`) — 6 sub-checks (contact completeness, page count, CGPA presence, metric density %, action-verb start, filler density) computing the numeric parts of ATS-Compliance / Contact / Content-Quality / Polish subscores. Cached by `sha256(text + role + rubric_version)` for same-input-same-output guarantee. This is the trust foundation of "no one can call it a slot machine."
+
+**Files touched (`feature/v2-rate-mode` branch, not main):** `src/rate/parse.js`, `src/rate/extract.js`, `src/rate/README.md`, `scripts/rate-parse.js`, `package.json`, `package-lock.json`.
+
 ### Session — 2026-07-16 → 2026-07-17 (Gunjita live-test bug wave + Meta refusal guardrails + accuracy dashboard, Claude Opus 4.7)
 
 **Context:** Meet started onboarding friends after Meta went LIVE (2026-07-16 morning). First real friend (Gunjita) hit multiple traps we hadn't seen in synthetic tests. Session became a rapid-fire diagnose-fix-ship loop across 12 commits. Also polished admin dashboard for broadcast day. Full trace lives at `REMAINING.md` (created this session).
