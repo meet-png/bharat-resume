@@ -58,6 +58,46 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 
 ## 3. Session log
 
+### Session — 2026-07-21 (v2 Day 2: deterministic scorer + determinism guarantee, Claude Opus 4.7)
+
+**Context:** Day 1 shipped in commit `b1cd7ac`. Day 2 goal: the trust foundation of rate mode — a scorer whose output for the same input is byte-equal every time. Kills "AI slot machine" perception on contact.
+
+**What Day 2 shipped:**
+
+1. **`src/rate/lexicon.js`** — pure data, grep-and-append-friendly:
+   - 145 strong action verbs (Built, Shipped, Optimized, Chaired, Mentored, …)
+   - 26 filler phrases ("responsible for", "worked on", "helped with", "hands-on experience", "passionate about", …)
+   - `CGPA_RE` / `CGPA_BARE_RE` / `BOARD_PCT_RE` India-specific regexes
+   - `METRIC_UNITS_RE` catching numbers-with-units (%, K, M, L, Cr, ms, users, rows, txns, …), currency (₹/$/Rs), bare integers ≥2 chars, and ratios (20/20)
+   - Canonical section-header list with alias collapse (experience/internship/employment → "experience")
+
+2. **`src/rate/score.js`** — deterministic 6-check scorer:
+   - **ATS Compliance (2.0)**: multi-column penalty (parseMeta), canonical-section count
+   - **Contact & Structure (1.0)**: email format, phone digits, LinkedIn URL format (flags legacy `/pub/` as separate issue), GitHub for tech roles
+   - **Content Quality (2.0 of 3.0)**: metric density (full at 70%+), action-verb-start rate (full at 80%+), filler-phrase penalty (up to 0.4)
+   - **Polish (1.0 of 2.0)**: page count (>2 penalized), date-format consistency across education/experience/projects
+   - **India embedded**: CGPA presence, `/10` denominator, 10th/12th %
+   - Every issue carries `{ severity, category, source_line, why, cost }` — `source_line` cites the anchor from extract.js, `structural` when no single line applies
+   - `cacheKey({ text, role })` = `sha256(text + role + RUBRIC_VERSION)`; `RUBRIC_VERSION = 'r1-2026-07-21'` bumps invalidate cached scores automatically
+   - LLM parts of Content Quality (1.0) + Role Fit (2.0) + Polish grammar (1.0) come in Day 3
+
+3. **`scripts/rate-score.js`** — dev CLI: parse → extract → score with bar chart, cited issues, cache key display, and `--verify-cache` flag that scores twice and byte-compares the outputs.
+
+**Test evidence:**
+
+| PDF | Deterministic | ATS | Contact | Content | Polish | Issues | Determinism check |
+|---|---|---|---|---|---|---|---|
+| Meet's (dense tech) | **5.5 / 6** | 2.0 | 0.5 | 2.0 | 1.0 | 4 | ✓ identical (2186 bytes) |
+| Aditya's (fresher basic) | **4.9 / 6** | 2.0 | 0.5 | 1.4 | 1.0 | 8 | ✓ identical (4593 bytes) |
+
+Content Quality is where the scorer discriminates: Meet 100% metric coverage (12/12 bullets carry a number), Aditya 29% (2/7). Aditya's 3 metric-less project bullets cited by source_line 30/32/34 with the exact original wording quoted. Both PDFs' 0.5 Contact hit comes from the pdfjs hyperlink limitation (LinkedIn/GitHub URLs live behind the display text, not extractable without `page.getAnnotations()` merge — Day 2.5 punch).
+
+**Determinism guaranteed:** same PDF + same role + same rubric version → byte-equal `{ score, subscores, issues, cache_key }`. This is the "no one can call it a slot machine" contract. `--verify-cache` on the CLI proves it end-to-end.
+
+**Files touched (`feature/v2-rate-mode`):** `src/rate/lexicon.js`, `src/rate/score.js`, `src/rate/README.md`, `scripts/rate-score.js`, `PROGRESS.md`.
+
+**Day 3 next:** LLM scorer (`src/rate/score-llm.js`) covering the remaining 4 points — bullet impact judgment (1.0), role fit against jd_intel keywords (2.0), grammar polish (1.0). Combined with Day 2 output → total 10.0 score. Also: fix pdfjs URL extraction by merging `page.getAnnotations()` link positions (upgrades Contact subscore from "structural handicap" to "genuine signal").
+
 ### Session — 2026-07-20 → 2026-07-21 (v2 Day 1: rate-mode parse + extract with anchors, Claude Opus 4.7)
 
 **Context:** Pilot done, moving to v2. Rate-mode design decisions locked: ship BEFORE broadcast is done (pilot considered complete); score gating = free glimpse (top 3 issues) + ₹49 for full 8-point report and clean PDF; target role MANDATORY at intake. Branched `feature/v2-rate-mode` off main so v1 stays deployable.
