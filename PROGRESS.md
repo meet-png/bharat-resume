@@ -58,6 +58,58 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 
 ## 3. Session log
 
+### Session — 2026-07-22 (v2 Day 7.5: Canva template audit + refuse-before-extract hardening, Claude Opus 4.7)
+
+**Context:** Before Day 8 (payment fulfillment), Meet raised: "you know real resumes have wrong format and defects, right?" He dropped 4 Canva template PDFs to stress-test. Findings + fixes below.
+
+**The 4 test files (Canva template previews with placeholder content):**
+- **design(1) Sebastian Bennett** — mostly-clean design, would parse OK if filled
+- **design(2) Sharya Singh** — loose 2-column, education/experience reading order scrambled
+- **design(3) Richard Sanchez** — full multi-column, letter-spaced headers ("P R O F I L E", "S K I L L S"), sidebar-and-main text INTERLEAVED (line 20 had "S K I L L S" fused with a work bullet)
+- **design.pdf** — same content as design(3)
+
+**The critical failure surfaced:** existing `multiColumn` detector returned FALSE on Richard Sanchez despite the visible chaos. Cause: sidebar and main-column items land on different y-coordinates in pdfjs' text stream, so my line-reconstruction (2pt y-tolerance) treats them as separate lines. Each reconstructed line looks single-column even though the layout isn't. **Silent-bad extraction path:** parse succeeds, LLM produces a plausible-but-wrong `resume_json` from scrambled text, score fires, student pays ₹49 and gets improved-but-nonsense output.
+
+**What Day 7.5 shipped (`src/rate/parse.js` + `src/rate/extract.js` + `src/state/rate-prompts.js` + `src/state/rate-router.js`):**
+
+1. **`detectLetterSpacedHeaders(lines)`** — pattern `^[A-Z](\s[A-Z]){3,}...`  matches Canva's default header letter-spacing. ≥2 hits = confident Canva signature.
+
+2. **`detectCanvaPlaceholders(text)`** — token list catches unfilled templates: `reallygreatsite.com`, `+123-456-7890`, `123 Anywhere St`, `Lorem ipsum`, `Borcelle`, `Wardiere`, `Salford`, `Fauget Studio`, `Studio Shodwe`. ≥2 tokens = unfilled template preview.
+
+3. **Rewrote multi-column detector (`detectMultiColumnByHistogram`)** as a conservative x-cluster check: two peaks in the x-histogram separated by ≥30% of page width, BOTH carrying ≥20% of total items. This intentionally under-fires on ambiguous cases (real 2-col resumes that pdfjs streams coherently) rather than false-positive on healthy single-col (Meet's contact-line separators). Missed cases are recovered by the post-extract sparsity check below.
+
+4. **`checkExtractionQuality({ resume_json, parsedText, ... })`** in extract.js — post-extract sanity net for the escape case (student fills placeholders + strips letter-spacing but keeps Canva layout). If ≥200 words parsed but LLM extracted zero experience/projects/PoR/achievements, or bullet chars < 5% of source text when ≥400 words parsed → return `{ reason, suggestion }`. rate-router converts this to a graceful refuse.
+
+5. **`refusePdf(reason)` in rate-prompts.js** — expanded from 3 to 9 branches with Hinglish-first specific messages per reason:
+   - `canva-placeholder-template` — "abhi tak fill nahi hua"
+   - `canva-multi-column-template` — "2-column decorative template, ATS aur reader dono nahi padh sakte"
+   - `canva-letter-spaced-headers` — "P R O F I L E format signal, simple headers use karo"
+   - `multi-column-layout` — generic 2-column refusal
+   - `text-too-thin-probably-image-pdf` — image-based / scanned
+   - `no-text-extractable` — encrypted / all-image
+   - `docx-too-thin`, `docx-error`, default fallback
+
+**Test evidence:**
+
+| PDF | multiColumn | letterSpaced | canvaPlaceholder | Refuse verdict |
+|---|---|---|---|---|
+| design(1) Sebastian | false | false | **true** | ✅ canva-placeholder-template |
+| design(2) Sharya | false | false | **true** | ✅ canva-placeholder-template |
+| design(3) Richard | false | **true** | **true** | ✅ canva-placeholder-template |
+| design.pdf | false | **true** | **true** | ✅ canva-placeholder-template |
+| meet_kabra_resume_.pdf | false | false | false | ✅ passes to extract |
+| resume (6).pdf (Aditya) | false | false | false | ✅ passes to extract |
+
+**4/4 Canva templates refused with specific Hinglish reason. 0/2 healthy resumes false-positive.**
+
+Regression checks: `test:rate-verify` fabrication guard 20/20 green. `rate-flow.smoke.js` 7/7 assertions pass end-to-end.
+
+**Known escape case (documented, not currently caught by parse):** a student who fills in placeholder text with real content AND removes letter-spacing (rare — Canva doesn't easily let you customize this) AND keeps a chaotic multi-column layout. The post-extract sparsity check catches most of these; the rest would get a mediocre score honestly reflecting the extraction, no fabrication.
+
+**Files touched (`feature/v2-rate-mode`):** `src/rate/parse.js`, `src/rate/extract.js`, `src/state/rate-prompts.js`, `src/state/rate-router.js`, `PROGRESS.md`.
+
+**Day 8 next (unchanged):** payment webhook fulfillment for rate mode. Improved PDF + audit report delivery over WhatsApp.
+
 ### Session — 2026-07-21 (v2 Day 7: rate mode wired into state machine, Claude Opus 4.7)
 
 **Context:** Days 1-6 built rate-mode's pipeline (parse → extract → score → improve → verify → audit) as a set of pure functions callable from the CLI. Day 7 goal: wire it into the WhatsApp state machine so a real message → PDF upload → score → pay flow works. This is the merge-day work — the one place v2 has to touch v1 code — kept surgical.

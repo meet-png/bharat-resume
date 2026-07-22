@@ -69,16 +69,16 @@ function joinLineItems(items) {
   return out.replace(/\s+/g, ' ').trim();
 }
 
-// Heuristic: if a substantial fraction of visual lines contain a large x-gap
-// inside them, the document is probably multi-column. Multi-column layouts
-// confuse ATS parsers and our own linear reader — flag so the caller can
-// warn the student.
-function detectMultiColumn(pages) {
+// Heuristic 1 (legacy): substantial fraction of visual lines contain a large
+// x-gap inside them → likely multi-column. Kept because it catches the case
+// where sidebar and main share a y-coordinate; new detectors below catch the
+// case where they don't.
+function detectMultiColumnGaps(pages) {
   let bigGapLines = 0;
   let totalLines = 0;
   for (const page of pages) {
     const pageWidth = page.width || 600;
-    const gapThreshold = pageWidth * 0.15; // > 15% of page width = probable column break
+    const gapThreshold = pageWidth * 0.15;
     for (const line of page.lines) {
       totalLines++;
       const items = line.items;
@@ -91,6 +91,94 @@ function detectMultiColumn(pages) {
   }
   if (totalLines === 0) return false;
   return bigGapLines / totalLines > 0.25;
+}
+
+// Heuristic 2 (strict — only fires on STRONG two-column signatures): scan the
+// full page for text items whose x-start clusters at TWO distinct positions
+// separated by ≥ 30% of page width, where BOTH clusters have ≥ 25% of the
+// total items. Real 2-column PDFs (Richard Sanchez Canva) show this pattern.
+// Single-column PDFs with modest right-side content (Meet's contact line
+// separators) don't — the "right side" mass is < 15% of total.
+//
+// This is intentionally CONSERVATIVE. False negatives (missed multi-column)
+// are recoverable via the post-extract sparsity check; false positives
+// (refusing a healthy single-column resume) hurt real students immediately.
+function detectMultiColumnByHistogram(pages) {
+  const xBuckets = new Map(); // bucket-index → { count, x }
+  let total = 0;
+  let pageWidth = 600;
+  for (const page of pages) {
+    pageWidth = page.width || pageWidth;
+    const binSize = pageWidth * 0.03; // 3% bins
+    for (const line of page.lines) {
+      for (const it of line.items) {
+        if (!it.str || !it.str.trim()) continue;
+        const x = it.transform[4];
+        const b = Math.floor(x / binSize);
+        if (!xBuckets.has(b)) xBuckets.set(b, { count: 0, x: b * binSize });
+        xBuckets.get(b).count++;
+        total++;
+      }
+    }
+  }
+  if (total < 30) return false;
+  const sorted = [...xBuckets.values()].sort((a, b) => b.count - a.count);
+  if (sorted.length < 2) return false;
+  const top = sorted[0];
+  // Find the SECOND cluster — first sorted bucket that's ≥ 30% of page width
+  // away from the top peak. Small offsets from the top peak are just wrapped
+  // text at different indent levels within the same column.
+  const gapMin = pageWidth * 0.30;
+  let second = null;
+  for (let i = 1; i < sorted.length; i++) {
+    if (Math.abs(sorted[i].x - top.x) >= gapMin) { second = sorted[i]; break; }
+  }
+  if (!second) return false;
+  // BOTH clusters must carry substantial content. If the far-side cluster is
+  // < 25% of the top, it's likely a contact strip / decoration, not a column.
+  return second.count >= total * 0.20 && top.count >= total * 0.20;
+}
+
+// Combined: fire if EITHER heuristic hits.
+function detectMultiColumn(pages) {
+  return detectMultiColumnGaps(pages) || detectMultiColumnByHistogram(pages);
+}
+
+// Letter-spaced section headers ("P R O F I L E", "S K I L L S") are a strong
+// Canva template signal — real ATS-friendly resumes never spell headers that
+// way. Detect them so the caller can refuse with a specific "Canva template"
+// message rather than a generic parse-failed one.
+const LETTER_SPACED_HEADER_RE = /^[A-Z](?:\s[A-Z]){3,}(?:\s+.*)?$/;
+function detectLetterSpacedHeaders(lines) {
+  let hits = 0;
+  for (const l of lines) {
+    if (LETTER_SPACED_HEADER_RE.test(String(l.text || '').trim())) hits++;
+  }
+  return hits >= 2; // ≥2 letter-spaced headers = confident Canva template
+}
+
+// Canva placeholder tokens — if the resume is dominated by these, it's an
+// unfilled template preview rather than a real student's resume. We refuse
+// so the student swaps for their filled version.
+const CANVA_PLACEHOLDER_TOKENS = [
+  'reallygreatsite.com',
+  '+123-456-7890',
+  '123-456-7890',
+  '123 anywhere st',
+  'lorem ipsum',
+  'borcelle',
+  'wardiere',
+  'salford',
+  'fauget studio',
+  'studio shodwe',
+];
+function detectCanvaPlaceholders(text) {
+  const lc = String(text || '').toLowerCase();
+  let hits = 0;
+  for (const tok of CANVA_PLACEHOLDER_TOKENS) {
+    if (lc.includes(tok)) hits++;
+  }
+  return hits >= 2; // ≥2 distinct placeholder tokens = template not filled
 }
 
 // PDF Link annotations give us the underlying hrefs that the text-content
@@ -191,6 +279,8 @@ async function parsePdfjs(buffer) {
       pageCount: doc.numPages,
       wordCount,
       multiColumn: detectMultiColumn(pages),
+      letterSpacedHeaders: detectLetterSpacedHeaders(lines),
+      canvaPlaceholder: detectCanvaPlaceholders(text),
     },
   };
 }
@@ -254,7 +344,15 @@ async function parse(buffer, { filename = '' } = {}) {
     }
   }
 
-  // PDF path
+  // PDF path.
+  // Refuse-BEFORE-extract signals (added 2026-07-22 after 4-Canva-template audit):
+  // (a) Canva placeholder tokens dominant → template not filled in
+  // (b) letter-spaced section headers ("P R O F I L E") → Canva template signature
+  //     paired with multi-column → guaranteed silent-bad extraction downstream
+  // (c) x-histogram multi-column detector (see detectMultiColumnByHistogram)
+  // We refuse rather than proceed because the LLM extractor would produce a
+  // PLAUSIBLE-BUT-WRONG resume_json from scrambled reading order — the exact
+  // "silent-bad" failure mode where the student pays and gets nonsense.
   let r1;
   try {
     r1 = await parsePdfjs(buffer);
@@ -263,6 +361,18 @@ async function parse(buffer, { filename = '' } = {}) {
     r1 = null;
   }
   if (r1 && r1.meta.wordCount >= MIN_WORDS) {
+    // Post-parse refuse checks — order by specificity (most-specific message wins).
+    if (r1.meta.canvaPlaceholder) {
+      return { ...r1, meta: { ...r1.meta, layer: 3, layerName: 'refuse', refuse: true, refuseReason: 'canva-placeholder-template' } };
+    }
+    if (r1.meta.multiColumn) {
+      // Letter-spaced headers strongly suggest Canva; give a more specific reason.
+      const reason = r1.meta.letterSpacedHeaders ? 'canva-multi-column-template' : 'multi-column-layout';
+      return { ...r1, meta: { ...r1.meta, layer: 3, layerName: 'refuse', refuse: true, refuseReason: reason } };
+    }
+    if (r1.meta.letterSpacedHeaders) {
+      return { ...r1, meta: { ...r1.meta, layer: 3, layerName: 'refuse', refuse: true, refuseReason: 'canva-letter-spaced-headers' } };
+    }
     return { ...r1, meta: { ...r1.meta, layer: 1, layerName: 'pdfjs' } };
   }
 

@@ -18,7 +18,7 @@
 
 const { STATES } = require('./states');
 const { parse } = require('../rate/parse');
-const { extract, flattenForRender } = require('../rate/extract');
+const { extract, flattenForRender, checkExtractionQuality } = require('../rate/extract');
 const { scoreAll } = require('../rate/score-combined');
 const p = require('./rate-prompts');
 const { setSession } = require('../store/redis');
@@ -85,6 +85,21 @@ async function handleAwaitingPdf({ session, phoneHash, body, phoneFrom, attachme
     if (!ex.resume_json) {
       logEvent({ phoneHash, eventName: 'rate_extract_skipped', state: session.state, payload: { reason: ex.meta && ex.meta.reason } });
       return p.refusePdf('extract-skipped');
+    }
+
+    // Post-extract sanity check — catches chaotic multi-column layouts that
+    // slipped past parse-layer refuse triggers. Without this, a Canva 2-col
+    // resume with placeholder text replaced would extract to near-empty JSON
+    // and the student would get scored on nothing.
+    const qc = checkExtractionQuality({
+      resume_json: ex.resume_json,
+      parsedText: parsed.text,
+      parsedLineCount: parsed.lines.length,
+    });
+    if (qc) {
+      logger.warn({ phoneHash: phoneHash.slice(0, 12), reason: qc.reason, details: qc.details }, 'rate: post-extract quality check failed');
+      logEvent({ phoneHash, eventName: 'rate_extract_quality_refused', state: session.state, payload: { reason: qc.reason } });
+      return p.refusePdf(qc.suggestion === 'chaotic-layout' ? 'multi-column-layout' : 'text-too-thin-probably-image-pdf');
     }
 
     persistRateSource(session, {

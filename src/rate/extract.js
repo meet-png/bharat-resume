@@ -212,4 +212,63 @@ function rawForAnchor(parsedLines, sourceLine) {
   return hit ? hit.text : null;
 }
 
-module.exports = { extract, flattenForRender, rawForAnchor };
+// Post-extract sanity check. Catches the case where parse succeeded (didn't
+// hit any refuse trigger) but extraction came back suspiciously sparse — for
+// example, chaotic multi-column layouts that produce scrambled reading order
+// where the LLM can't recover coherent experience/projects/skills.
+//
+// Signals of a "silent-bad" extraction:
+//   - source has ≥ 200 words
+//   - AND extraction returned zero experience AND zero projects AND zero POR
+//   - AND no achievements
+// A student's resume with ≥200 words simply cannot legitimately have zero
+// entries across all four bullet-carrying sections — that's an extractor
+// failure, likely from column scrambling, table chaos, or exotic formatting.
+//
+// Returns null on success, or a diagnostic { reason, suggestion } if the
+// extraction looks suspect. The caller (rate-router) can convert this into
+// a graceful refuse.
+function checkExtractionQuality({ resume_json, parsedText, parsedLineCount }) {
+  if (!resume_json) return { reason: 'extraction-null', suggestion: 'text-format' };
+  const wc = (String(parsedText || '').match(/\S+/g) || []).length;
+  if (wc < 200) return null; // too little text — probably legitimate, defer to score
+
+  const experience = Array.isArray(resume_json.experience) ? resume_json.experience.length : 0;
+  const projects = Array.isArray(resume_json.projects) ? resume_json.projects.length : 0;
+  const por = Array.isArray(resume_json.por) ? resume_json.por.length : 0;
+  const achievements = Array.isArray(resume_json.achievements) ? resume_json.achievements.length : 0;
+  const totalEntries = experience + projects + por + achievements;
+  if (totalEntries === 0) {
+    return {
+      reason: 'silent-bad-extraction',
+      suggestion: 'chaotic-layout',
+      details: `${wc} words parsed, but LLM extracted zero experience/projects/PoR/achievements. Likely a scrambled multi-column layout.`,
+    };
+  }
+
+  // Secondary check: extraction dropped an unreasonable share of source content.
+  const bullets = [];
+  for (const arr of [experience, projects, por].map((_, i) => resume_json[['experience', 'projects', 'por'][i]] || [])) {
+    for (const entry of arr) {
+      for (const b of (entry.bullets || [])) {
+        const t = typeof b === 'string' ? b : b.text || '';
+        if (t.trim()) bullets.push(t);
+      }
+    }
+  }
+  const bulletChars = bullets.reduce((n, s) => n + s.length, 0);
+  const textChars = String(parsedText || '').length;
+  // If bullets account for < 5% of source text with ≥400 words, extraction
+  // is probably missing large chunks of the resume (typical multi-column
+  // symptom: LLM captures name/email/summary but drops experience column).
+  if (wc >= 400 && textChars > 0 && bulletChars / textChars < 0.05) {
+    return {
+      reason: 'sparse-bullet-extraction',
+      suggestion: 'chaotic-layout',
+      details: `${wc} source words but only ${bulletChars} chars in bullets — likely a scrambled layout dropped major sections.`,
+    };
+  }
+  return null;
+}
+
+module.exports = { extract, flattenForRender, rawForAnchor, checkExtractionQuality };

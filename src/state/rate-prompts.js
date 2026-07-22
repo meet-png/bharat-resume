@@ -38,23 +38,63 @@ const parsing = () =>
 const scoring = () =>
   '⏳ Scoring in progress — parsing, extracting content, checking ATS compliance, JD fit… ~30 seconds.';
 
-// Refuse-parse message — sent when parse.js layer 3 fires (image-based PDF,
-// too little text, etc.). Include the specific reason so the student knows
-// what to fix.
+// Refuse-parse message — sent when parse.js layer 3 fires. Include a specific
+// reason line so the student knows exactly what to fix. Each branch below
+// corresponds to a `refuseReason` returned by src/rate/parse.js.
 const refusePdf = (reason) => {
-  const reasonLine = reason === 'text-too-thin-probably-image-pdf'
-    ? '  • Aisa lagta hai ye PDF image-based hai (Canva templates aksar aise hote hain — text nahi read ho sakta).'
-    : reason === 'no-text-extractable'
-    ? '  • Is PDF se koi text extract nahi ho paaya.'
-    : `  • Parse issue: ${reason}`;
+  let reasonLine, tip;
+  switch (reason) {
+    case 'canva-placeholder-template':
+      reasonLine = '  • Ye Canva ka *empty template* lagta hai — placeholder text (Lorem ipsum, "hello@reallygreatsite.com", "+123-456-7890") abhi tak fill nahi hua.';
+      tip = '  • Canva me apni details fill karo (name, email, real experience), export karo, phir bhejo.\n' +
+            '  • Ya *"build"* likhkar chat me apna resume banao — main directly ATS-ready PDF banaunga.';
+      break;
+    case 'canva-multi-column-template':
+      reasonLine = '  • Ye Canva ka *2-column decorative template* lagta hai — sidebar (skills/contact) aur main column ka mix. ATS parsers aur hamara reader dono is layout ko theek se nahi padh sakte.';
+      tip = '  • Simple single-column resume banao — Word / Google Docs ka basic template best hai.\n' +
+            '  • Ya *"build"* likhkar chat me ATS-friendly resume banwao — free/₹49 me clean version.';
+      break;
+    case 'canva-letter-spaced-headers':
+      reasonLine = '  • Section headers me spaces hain ("P R O F I L E", "S K I L L S") — ye Canva template signal hai. ATS parsers is format ko section headers ke roop me nahi pehchante.';
+      tip = '  • Simple resume template use karo jisme section headers plain hon ("PROFILE", "SKILLS").\n' +
+            '  • Ya *"build"* likhkar chat me apna resume banwao.';
+      break;
+    case 'multi-column-layout':
+      reasonLine = '  • Ye 2-column layout hai — visual me sundar dikhta hai but ATS parsers aur hamara reader dono column order jumble kar dete hain.';
+      tip = '  • Single-column layout me export karo, phir bhejo.\n' +
+            '  • Ya *"build"* likhkar chat me apna resume banwao.';
+      break;
+    case 'text-too-thin-probably-image-pdf':
+      reasonLine = '  • Aisa lagta hai ye PDF image-based hai (scanned / phone se photo liya hua / Canva image export).';
+      tip = '  • Text-based PDF chahiye — Google Docs / Word se "Save As PDF" karo, screenshot / scan nahi.\n' +
+            '  • Ya *"build"* likhkar chat me naya resume banwao.';
+      break;
+    case 'no-text-extractable':
+      reasonLine = '  • Is PDF se koi text extract nahi ho paaya — pura file image-based ya encrypted hai.';
+      tip = '  • Word (.docx) file bhejo, ya text-based PDF export karo.\n' +
+            '  • Ya *"build"* likhkar chat me naya resume banwao.';
+      break;
+    case 'docx-too-thin':
+      reasonLine = '  • Ye Word file bahut chhoti hai (100 words se kam) — probably empty template ya galat file.';
+      tip = '  • Complete resume file bhejo.\n' +
+            '  • Ya *"build"* likhkar chat me apna resume banwao.';
+      break;
+    case 'docx-error':
+      reasonLine = '  • Word file read nahi ho paayi — file corrupt ya password-protected ho sakti hai.';
+      tip = '  • File dobara save karke bhejo (Save As → new file).\n' +
+            '  • Ya *"build"* likhkar chat me apna resume banwao.';
+      break;
+    default:
+      reasonLine = `  • Parse issue: ${reason || 'unknown'}`;
+      tip = '  • Simple single-column PDF ya .docx file bhejo.\n' +
+            '  • Ya *"build"* likhkar chat me apna resume banwao.';
+  }
   return (
-    '⛔ Ye PDF process nahi ho paaya.\n\n' +
+    '⛔ Ye file process nahi ho paayi.\n\n' +
     reasonLine + '\n\n' +
-    'Try karo:\n' +
-    '  • Word file (.docx) me export karke bhejo\n' +
-    '  • Text-based PDF me convert kariye (Google Docs → Download → PDF)\n' +
-    '  • Ya *"build"* likhkar naya resume banao chat me\n\n' +
-    'Apna resume dobara bhejo, ya "cancel" karo.'
+    '*Solution:*\n' +
+    tip + '\n\n' +
+    'Dobara file bhejo, ya "cancel" karo.'
   );
 };
 
