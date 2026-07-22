@@ -80,6 +80,11 @@ async function fetchMetrics() {
   const atsScores = [];
   let freeEdits = 0;
   let paidEdits = 0;
+  // Mode-split counts from mode_selected event payload. Ties into rate-mode
+  // funnel below.
+  let modeSelectedBuild = 0;
+  let modeSelectedRate = 0;
+  const rateScores = [];
 
   for (const e of events) {
     counts[e.event_name] = (counts[e.event_name] || 0) + 1;
@@ -93,6 +98,13 @@ async function fetchMetrics() {
       if (e.payload.phase === 'paid') paidEdits++;
       else freeEdits++;
     }
+    if (e.event_name === 'mode_selected' && e.payload) {
+      if (e.payload.mode === 'build') modeSelectedBuild++;
+      else if (e.payload.mode === 'rate') modeSelectedRate++;
+    }
+    if (e.event_name === 'rate_score_computed' && e.payload && typeof e.payload.score === 'number') {
+      rateScores.push(e.payload.score);
+    }
   }
 
   const delivered = counts.resume_delivered || 0;
@@ -100,6 +112,26 @@ async function fetchMetrics() {
   const avgAts = atsScores.length
     ? Math.round(atsScores.reduce((a, b) => a + b, 0) / atsScores.length)
     : null;
+
+  // Rate-mode funnel. Kept separate from build funnel because the two flows
+  // have different steps + different unit economics (build charges once for
+  // clean PDF, rate charges once for improved PDF + audit report).
+  const rateEntered = modeSelectedRate;
+  const rateUploaded = counts.rate_pdf_ingested || 0;
+  const rateScored = counts.rate_score_computed || 0;
+  const rateLinked = counts.rate_payment_link_created || 0;
+  const ratePaid = counts.rate_payment_succeeded || 0;
+  const rateDelivered = counts.rate_delivered || 0;
+  const rateRefused = (counts.rate_parse_refused || 0)
+    + (counts.rate_extract_skipped || 0)
+    + (counts.rate_extract_quality_refused || 0);
+  const rateCancelled = counts.rate_cancelled || 0;
+  const avgRateScore = rateScores.length
+    ? Math.round((rateScores.reduce((a, b) => a + b, 0) / rateScores.length) * 10) / 10
+    : null;
+
+  // Total revenue: build ₹49 per paid + rate ₹49 per paid. Same ₹49 unit for now.
+  const totalPaid = paid + ratePaid;
 
   return {
     users: users || 0,
@@ -115,11 +147,30 @@ async function fetchMetrics() {
       payment_succeeded: paid,
       clean_pdf_delivered: counts.clean_pdf_delivered || 0,
     },
+    modeSplit: {
+      build: modeSelectedBuild,
+      rate: modeSelectedRate,
+      total: modeSelectedBuild + modeSelectedRate,
+    },
+    rateFunnel: {
+      entered: rateEntered,
+      pdf_ingested: rateUploaded,
+      scored: rateScored,
+      payment_link_created: rateLinked,
+      payment_succeeded: ratePaid,
+      delivered: rateDelivered,
+      refused: rateRefused,
+      cancelled: rateCancelled,
+      avg_score: avgRateScore,
+      score_samples: rateScores.length,
+      conversion_pct: rateScored ? Math.round((ratePaid / rateScored) * 100) : 0,
+    },
     today: todayCounts,
     conversionPct: delivered ? Math.round((paid / delivered) * 100) : 0,
     edits: { free: freeEdits, paid: paidEdits },
     ats: { avg: avgAts, samples: atsScores.length },
-    revenueInr: paid * 49,
+    revenueInr: totalPaid * 49,
+    revenueBreakdown: { build: paid * 49, rate: ratePaid * 49 },
     recent: events.slice(0, 15).map((e) => ({
       event_name: e.event_name,
       state: e.state_at_event,

@@ -58,6 +58,64 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 
 ## 3. Session log
 
+### Session — 2026-07-23 (v2 Day 9: merge readiness — cross-mode smoke, admin dashboard, RATE_MODE.md reference doc, Claude Opus 4.7)
+
+**Context:** Days 1-8 built rate mode as a complete, paid-shippable pipeline. Day 9 goal: make it safe to merge to main. Three deliverables — a cross-mode contamination test (highest safety value), admin dashboard extensions for rate funnel metrics (operational visibility for the pilot broadcast), and `docs/RATE_MODE.md` (future-Claude reference so a cold session can pick up rate-mode context without re-reading 15 files).
+
+**What Day 9 shipped:**
+
+1. **`scripts/rate-and-build.smoke.js`** (new) — cross-mode contamination smoke. Uses one phone hash, walks the state machine through:
+   - Block A: cold hi → mode select → rate → PDF upload → cancel (11 assertions)
+   - Block B: same phone picks build → verify no rate.* leak into build state (4 assertions)
+   - Block C: mid-build "rate my resume" text → mode-aware refusal fires but state unchanged (3 assertions)
+   - Block D: reset → back to mode select (2 assertions)
+   - Block E: pick rate AGAIN → verify no stale session.rate.* data or paid flag (5 assertions)
+   - Block F: "rate my resume" text in RATE_AWAITING_PDF → gets the "send PDF" nudge, NOT the build-mode "we don't rate resumes" refusal (4 assertions)
+   - **29/29 assertions pass.** Zero contamination between modes on the same phone.
+
+2. **`src/store/postgres.js#fetchMetrics`** extended:
+   - Reads `mode_selected.payload.mode` to split entrants build vs rate.
+   - Aggregates rate-mode funnel: entered / pdf_ingested / scored / payment_link_created / payment_succeeded / delivered.
+   - Sums refused counts (parse_refused + extract_skipped + extract_quality_refused).
+   - Reads `rate_score_computed.payload.score` for average rate-mode score.
+   - Revenue now `(build_paid + rate_paid) * ₹49` with a breakdown line.
+   - Returns new fields: `modeSplit`, `rateFunnel`, `revenueBreakdown`.
+
+3. **`src/routes/admin.js#renderMetrics`** extended:
+   - New "Mode split" table above Funnel.
+   - Existing Funnel renamed to "Build funnel (% of sessions started)".
+   - New "Rate funnel (% of rate-mode entrants)" table with all 6 stages + refused + cancelled + conversion% + avg score.
+   - Revenue card now shows breakdown ("build ₹X · rate ₹Y") below the total.
+
+4. **`docs/RATE_MODE.md`** (new, ~250 lines) — architecture reference doc. Sections:
+   - What rate mode is (product-level) + the single invariant
+   - End-to-end flow diagram (states + transitions)
+   - File-by-file responsibility map (19 files, one-line each with "load when" trigger)
+   - State field cheat sheet (session.rate.*)
+   - The 3 non-negotiable guarantees (no fabrication, no over-compression, honest re-score)
+   - Bench commands (9 CLI recipes)
+   - Common failure modes + where to look (11 symptoms → root cause → file)
+   - When to add a new state / prompt / event / refuse reason / improve heuristic
+   - Non-goals (5 explicit things v2 doesn't do)
+   - Regression contract (3 mandatory suites)
+
+**Test evidence:**
+
+Full regression pass:
+- `test:rate-verify` (fabrication guard): **20/20 green** ✓
+- `rate-flow.smoke.js` (state machine): **7/7 green** ✓
+- `rate-and-build.smoke.js` (cross-mode contamination): **29/29 green** ✓
+- `rate-fulfill.smoke.js` (payment fulfillment E2E, from Day 8): **13/13 green** ✓
+
+Nothing in build mode changed. Nothing in the fabrication or preservation guards changed. Zero regressions.
+
+**Files touched (`feature/v2-rate-mode`):** `scripts/rate-and-build.smoke.js` (new), `src/store/postgres.js`, `src/routes/admin.js`, `docs/RATE_MODE.md` (new), `PROGRESS.md`.
+
+**Rate mode is now merge-ready.** Recommended next actions (Day 10):
+1. Manual smoke on live Meta WhatsApp — one full rate-mode conversation with a real phone.
+2. Merge `feature/v2-rate-mode` → `main` via PR (small dev-team pattern: even solo, a PR gives a rendered diff for a final read).
+3. Watch Railway deploy + admin dashboard for first few rate-mode entrants.
+
 ### Session — 2026-07-23 (v2 Day 8: rate-mode payment webhook fulfillment — pipeline is now end-to-end paid, Claude Opus 4.7)
 
 **Context:** Days 1-7.5 built parse → extract → score → improve → verify → audit → glimpse → pay-link. Day 8 goal: close the loop by wiring the paid webhook to actually improve, re-score, render the clean PDF, upload, and deliver both the PDF and the audit report over WhatsApp. Meet's rate-mode pilot flow is now paid-shippable.
