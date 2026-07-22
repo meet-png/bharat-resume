@@ -8,9 +8,9 @@
 // bullet patterns. Includes both common ("Built") and specific ("Refactored")
 // verbs, plus PoR/leadership-adjacent ("Led", "Chaired") for non-code roles.
 const ACTION_VERBS = new Set([
-  'accelerated', 'achieved', 'acquired', 'analyzed', 'applied', 'architected',
+  'accelerated', 'achieved', 'acquired', 'analyzed', 'applied', 'architected', 'authored',
   'assembled', 'automated', 'boosted', 'built', 'chaired', 'coached',
-  'coded', 'collaborated', 'communicated', 'compiled', 'completed', 'composed',
+  'coded', 'collaborated', 'communicated', 'compiled', 'completed', 'composed', 'computed',
   'conceived', 'conducted', 'configured', 'constructed', 'consulted', 'coordinated',
   'created', 'cut', 'debugged', 'decreased', 'defined', 'delivered', 'demonstrated',
   'deployed', 'designed', 'developed', 'devised', 'diagnosed', 'directed',

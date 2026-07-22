@@ -8,6 +8,9 @@ Read this in order:
 - **score.js** — deterministic scorer. Same input → byte-equal output, always. Returns `{ score_deterministic, subscores, issues, meta }` with 6 checks producing 6.0 of the total 10.0. Cache-key = `sha256(text + role + RUBRIC_VERSION)`. Bump `RUBRIC_VERSION` to invalidate cached scores.
 - **score-llm.js** — LLM scorer. 3 subscores adding 4.0 to the total 10.0: bullet impact judgment (1.0, LLM 0/1/2 per bullet), role fit vs jd_intel keywords (2.0, deterministic coverage after one LLM jd_intel call), grammar polish (1.0, hard-error only). Temperature 0; the true determinism guarantee comes from Redis caching on the caller side.
 - **score-combined.js** — merges deterministic + LLM into the total 10.0 score. `scoreAll(input) → { score, subscores, issues, meta }`. This is what WhatsApp bot + audit report generator will call.
+- **verify.js** — content-atom fabrication verifier. Deterministic. Every rewritten bullet passes through here BEFORE it can be rendered into a paid PDF. Extracts atoms (numbers with units, currency, tech tokens with alias collapse, proper nouns) from the rewrite; verifies each against the original bullet + full source resume. Returns `{ ok, unverified_atoms, details }`. Any unverified atom → caller MUST reject the rewrite. This is the moat.
+- **`data/tech-dictionary.json`** — seed of ~400 tech tokens + 30 aliases (K8s↔Kubernetes, JS↔JavaScript, GH Actions↔GitHub Actions, etc.). Grow by appending; when the verifier rejects a legitimate proper noun in prod, add it here.
+- **`scripts/rate-verify.test.js`** — regression suite: 10 legitimate rewrites (must PASS) + 10 fabrication attempts (must FAIL). Wired into `.runtime/check.js` and exposed as `npm run test:rate-verify`. If a fabrication ever slips through, this catches it BEFORE commit.
 
 ## Day 1 evidence
 
@@ -57,4 +60,7 @@ node scripts/rate-score.js <path.pdf> --role "Data Analyst" --verify-cache   # s
 
 # Day 3 — full 10-point (deterministic 6 + LLM 4). ~10s + ~$0.002.
 node scripts/rate-score.js <path.pdf> --role "Backend Engineer" --llm
+
+# Day 4 — fabrication verifier regression suite. No LLM. Runs in ~200ms.
+npm run test:rate-verify
 ```

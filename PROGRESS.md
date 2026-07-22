@@ -58,6 +58,63 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 
 ## 3. Session log
 
+### Session — 2026-07-21 (v2 Day 4: fabrication verifier — the moat, Claude Opus 4.7)
+
+**Context:** Day 3 shipped total 10-point scoring (`b960b0b`). Day 4 goal: build the STRUCTURAL guarantee that the improver LLM cannot invent metrics, tools, companies, or credentials the student never had. This is what makes "no scam" a code contract, not a prompt promise.
+
+**What Day 4 shipped:**
+
+1. **`data/tech-dictionary.json`** — ~400 canonical tech tokens (languages, frameworks, DBs, cloud, tools, ML/data, dev tools, payment gateways, big consumer companies) + 30 aliases (K8s↔Kubernetes, JS↔JavaScript, PG↔PostgreSQL, GH Actions↔GitHub Actions, etc.). Grow by appending; verifier collapses aliases in both directions.
+
+2. **`src/rate/verify.js`** — deterministic content-atom verifier. Extracts atoms from a rewrite:
+   - Numbers with units (50K users, 92%, ₹5 lakh, 20/20, p95 400ms) with normalization (50K == 50000)
+   - Currency amounts (₹, $, Rs)
+   - Ratios (47/47)
+   - Percentiles (p95, p99)
+   - Tech tokens (with alias collapse)
+   - Proper nouns (companies, products, orgs not in the dictionary)
+   For each atom, verifies it appears in the original bullet OR anywhere in source text. Any unverified atom → `ok: false` and the caller MUST reject the rewrite. Two subtleties worth locking in:
+   - **Sentence-start verbs stripped from proper-noun extraction** so "Built ResumeRocket" reduces to the entity "ResumeRocket" (verification bites on the real entity, not on "built" which is naturally in source everywhere). Uses `isVerbForm()` with -ed/-ing/-ied morphology + `re-` prefix strip.
+   - **Multi-word proper nouns require ALL content words in source**, not any. This is what stops "Built ResumeRocket" from passing on the strength of "built" alone.
+
+3. **`scripts/rate-verify.test.js`** — regression suite: 10 legitimate rewrites (must PASS) + 10 fabrication attempts (must FAIL). Wired into `.runtime/check.js` and exposed as `npm run test:rate-verify`. Ran under 200ms.
+
+4. **Wired into `.runtime/check.js`** — verifier suite runs before every commit as the first test in the pre-commit gate. A fabrication that slips through never reaches a student.
+
+**Test evidence:**
+
+**20/20 cases pass on first fixture run** after two rounds of tuning:
+
+Legitimate (all PASS):
+- L1 verb-strengthening
+- L2 restructure preserving all numeric atoms
+- L3 tech extracted from same project line
+- L4 tech extracted from a different project's section
+- L5 rupee metric preserved (₹18,310 Cr → ₹4,711 Cr with SARIMAX added from source)
+- L6 tech extracted from skills section
+- L7 number normalization (50K in rewrite matches 50000 in source by value)
+- L8 proper noun mentioned in source
+- L9 tech alias (GH Actions ↔ GitHub Actions)
+- L10 pure structural / verb-only rewrite
+
+Fabrication (all CAUGHT):
+- F1 invented percent (40%) — caught
+- F2 invented user count (10K+) — caught
+- F3 invented company (Google) — caught
+- F4 invented tech (Docker + Kubernetes + AWS) — caught
+- F5 invented credential (Stanford CS230) — caught
+- F6 mimicked-style metric (500+ delegates, ₹15,00,000) — caught
+- F7 invented product name (ResumeRocket) — caught
+- F8 invented dollar amount ($5,000/month) — caught
+- F9 invented percentile (p99 <120ms) — caught
+- F10 invented ratio (47/47) — caught
+
+**The contract this locks in:** no rewrite containing a metric, tool, company, or product name absent from the source resume can pass verification. A false-reject on a legitimate rewrite is a tuning problem (the improver will safely fall back to verb-strengthening); a false-accept on a fabrication is an interview-killer for the student and a lawsuit vector for us. The suite fails on ANY fabrication slipping through — that's a pre-commit blocker forever.
+
+**Files touched (`feature/v2-rate-mode`):** `data/tech-dictionary.json`, `src/rate/verify.js`, `src/rate/lexicon.js` (added 2 verbs), `src/rate/README.md`, `scripts/rate-verify.test.js`, `.runtime/check.js`, `package.json`, `PROGRESS.md`.
+
+**Day 5 next:** the improver (`src/rate/improver.js`) — LLM rewriter that produces the improved bullets. Uses the full-resume context so it can legitimately reference tech and details from elsewhere. Every output bullet passes through verify.js before being accepted; on rejection, falls back to a deterministic "verb strengthening only" rewrite that never adds new content. Nothing the improver produces reaches a student until verified.
+
 ### Session — 2026-07-21 (v2 Day 3: LLM scorer + pdfjs URL merge + full 10-point rubric, Claude Opus 4.7)
 
 **Context:** Day 2 shipped `2047c91` (deterministic 6-point scorer with byte-equal same-input-same-output). Day 3 goal: complete the total 10-point rubric with the 4-point LLM contribution + fix the pdfjs URL extraction limitation blocking Contact subscore.
