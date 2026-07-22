@@ -11,6 +11,8 @@ Read this in order:
 - **verify.js** — content-atom fabrication verifier. Deterministic. Every rewritten bullet passes through here BEFORE it can be rendered into a paid PDF. Extracts atoms (numbers with units, currency, tech tokens with alias collapse, proper nouns) from the rewrite; verifies each against the original bullet + full source resume. Returns `{ ok, unverified_atoms, details }`. Any unverified atom → caller MUST reject the rewrite. This is the moat.
 - **`data/tech-dictionary.json`** — seed of ~400 tech tokens + 30 aliases (K8s↔Kubernetes, JS↔JavaScript, GH Actions↔GitHub Actions, etc.). Grow by appending; when the verifier rejects a legitimate proper noun in prod, add it here.
 - **`scripts/rate-verify.test.js`** — regression suite: 10 legitimate rewrites (must PASS) + 10 fabrication attempts (must FAIL). Wired into `.runtime/check.js` and exposed as `npm run test:rate-verify`. If a fabrication ever slips through, this catches it BEFORE commit.
+- **improver.js** — LLM rewriter with mandatory verifier gate. `improveSection(...) → { improved: [{ original, improved, mode, verified, changes }] }`. Batches bullets by section (up to 8 per call). Every output bullet passes through `verify.js`. On failure, retries ONCE with an even stricter prompt that cites the flagged atoms; on second failure, falls back to `safeFallback()` — a deterministic verb-strengthener that only replaces filler openings (Worked on → Built, Responsible for → Owned, etc.) and never adds content.
+- **improve-resume.js** — whole-resume improvement pipeline. `improveResume(input) → { resume_json_improved, audit, meta }`. Sections run in parallel; verifier runs per-bullet inside each section so a fabrication in one section can't propagate. `audit[]` is what the audit-report generator consumes: `{ section, entry_label, source_line, original, improved, mode, verified, unverified, changes }` per bullet.
 
 ## Day 1 evidence
 
@@ -46,6 +48,7 @@ Role Fit correctly LOW for Meet at "Backend SWE" (his resume is Python/data-focu
 - **Achievements vs. certifications overlap** — soft semantic issue; sometimes the LLM buckets a "won hackathon" line under achievements when the source uses "CERTIFICATIONS". Fix if it hurts a real student.
 - **Multi-column detection heuristic**: tuned at 25% of lines showing internal gaps > 15% page width. Not yet tested against a Canva 2-column template — need a fixture.
 - **Role Fit non-determinism**: jd_intel comes from a single LLM call that varies slightly run-to-run. Cache jd_intel by `sha256(role)` in Redis (30d TTL) on the caller side to lock this down.
+- **Improver over-compression** (Day 5 observation): the LLM sometimes shortens a rich bullet for style and drops meaningful specifics (e.g. Meet's line 48 lost "free-edit loop" and "role-tailored rewriter" details). The verifier doesn't guard against this — nothing was invented, just deleted. Add a content-preservation post-check that rejects the rewrite when it drops more than N atoms from the original.
 
 ## Bench
 
@@ -63,4 +66,7 @@ node scripts/rate-score.js <path.pdf> --role "Backend Engineer" --llm
 
 # Day 4 — fabrication verifier regression suite. No LLM. Runs in ~200ms.
 npm run test:rate-verify
+
+# Day 5 — full improve pipeline: parse → extract → improve → per-bullet diff + verifier verdicts
+node scripts/rate-improve.js <path.pdf> --role "Data Analyst"
 ```

@@ -58,6 +58,41 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 
 ## 3. Session log
 
+### Session — 2026-07-21 (v2 Day 5: LLM improver with verifier gate + safe fallback, Claude Opus 4.7)
+
+**Context:** Day 4 shipped the fabrication verifier (`2d8f523`). Day 5 goal: the improver that USES the verifier — an LLM rewriter for every bullet, gated by verify.js on the way out. Nothing that fails verification reaches the student.
+
+**What Day 5 shipped:**
+
+1. **`src/rate/improver.js`** — `improveSection({ bullets, section, role, sourceText })` — one LLM call per section (batched, up to 8 bullets per call). Prompt hard-codes: "every atom in your output must appear in the ORIGINAL bullet or FULL RESUME context." Model: `gpt-4o` (config.LLM_EDIT) — stronger reasoning for verifier-friendly rewrites. After the batch returns, each bullet is individually verified.
+   - On verifier failure: retry ONCE with an extra guidance line citing the flagged atoms.
+   - On second failure: fall back to `safeFallback()` — deterministic verb replacement (Worked on → Built, Responsible for → Owned, Helped with → Contributed to, Assisted with → Supported, etc.). Since safeFallback strictly reduces atoms, it can never be a fabrication.
+   - Mode per bullet: `llm | llm-retry | safe-fallback | unchanged | skipped`.
+
+2. **`src/rate/improve-resume.js`** — `improveResume({ resume_json, sourceText, role })` runs experience + projects + por + achievements sections in `Promise.all`. Returns `{ resume_json_improved, audit, meta }`. Audit is what the audit-report generator consumes: `[{ section, entry_label, source_line, original, improved, mode, verified, unverified, changes }]` per bullet.
+
+3. **`scripts/rate-improve.js`** — dev CLI showing per-bullet BEFORE/AFTER diff with mode icons (✓ llm, ↻ retry, ⚠ fallback, · unchanged) and unverified atoms if any leak.
+
+**Test evidence on real PDFs:**
+
+| PDF | Role | Bullets | LLM verified | Fallback | Unchanged | Unverified | Time |
+|---|---|---|---|---|---|---|---|
+| Aditya's | Backend SWE | 7 | 7 | 0 | 0 | **0** | 2.2s |
+| Meet's | Data Analyst | 12 | 12 | 0 | 0 | **0** | 7.6s |
+
+**Zero unverified atoms across both runs.** The moat is intact end-to-end.
+
+Aditya's line 23 gained "MongoDB" (from his skills section). Aditya's line 36 gained "Java and Python" (from his skills). Meet's line 28 gained "Claude API" (from DM-to-Deal tech_stack). Meet's line 44 gained "Node.js and OpenAI gpt-4o-mini" (from Bharat Resume tech_stack). Every added detail cites a source line — every atom is grounded.
+
+**Content-preservation caveat surfaced (Day 5+ punch):** Meet's line 48 improvement is a stylistic regression:
+  BEFORE: "Built deterministic ATS scorer (bullet density × action verbs × JD-keyword intersection) + free-edit loop — dense resumes reach 92/100; role-tailored rewriter mines GitHub READMEs without fabricating data."
+  AFTER:  "Built deterministic ATS scorer using Node.js, optimizing resumes to 92/100 by analyzing bullet density, action verbs, and JD-keyword intersection."
+The LLM shortened for style and dropped "free-edit loop" and "role-tailored rewriter mines GitHub READMEs without fabricating data." Verifier doesn't guard against this because nothing was invented — just deleted. Punch: content-preservation post-check that rejects the rewrite when it drops more than N atoms from original. Logged in `src/rate/README.md`. Not a Day 5 blocker.
+
+**Files touched (`feature/v2-rate-mode`):** `src/rate/improver.js`, `src/rate/improve-resume.js`, `src/rate/README.md`, `scripts/rate-improve.js`, `PROGRESS.md`.
+
+**Day 6 next:** the **audit report generator** (`src/rate/audit.js`) — turns the improve-resume `audit[]` into the student-facing before/after report shipped alongside the improved PDF. Every change cites BEFORE, AFTER, source line, and the "changes" reason. This is what makes the moat visible to the student (and to any HR who interrogates the resume).
+
 ### Session — 2026-07-21 (v2 Day 4: fabrication verifier — the moat, Claude Opus 4.7)
 
 **Context:** Day 3 shipped total 10-point scoring (`b960b0b`). Day 4 goal: build the STRUCTURAL guarantee that the improver LLM cannot invent metrics, tools, companies, or credentials the student never had. This is what makes "no scam" a code contract, not a prompt promise.
