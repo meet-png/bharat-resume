@@ -144,7 +144,7 @@ function renderScoreGlimpse({ score, subscores, issues, role, unlockAmount = 49 
   lines.push('  • Clean improved PDF (no watermark)');
   lines.push('  • Audit trail — every change cites your original line');
   lines.push('');
-  lines.push('Reply *"pay"* to unlock, or *"cancel"* to start over.');
+  lines.push('Reply *"pay"* to unlock, *"change role"* to try a different target, or *"cancel"* to start over.');
   return lines.join('\n');
 }
 

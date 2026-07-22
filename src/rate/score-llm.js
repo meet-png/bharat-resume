@@ -13,11 +13,40 @@
 // Reuses v1's `src/llm/keywords.js` for jd_intel — same one-pass profile the
 // v1 rewriter consumes, so v2 rating stays aligned with v1 rewriting.
 
+const crypto = require('crypto');
 const { complete } = require('../llm/client');
 const { extractKeywords } = require('../llm/keywords');
 const { config } = require('../config');
+const { getClient: getRedisClient } = require('../store/redis');
 const logger = require('../logger');
 const { ACTION_VERBS } = require('./lexicon');
+
+// jd_intel Redis cache — same role produces the same intel profile, so
+// caching by sha256(role) turns Role Fit into a deterministic sub-score
+// across all sessions using the same target (Data Analyst, Backend SWE,
+// etc.). TTL matches the rubric-version lifetime.
+const JD_INTEL_TTL_SEC = 30 * 24 * 60 * 60; // 30 days
+async function getCachedJdIntel(role) {
+  if (!role) return null;
+  try {
+    const key = `jd_intel:${crypto.createHash('sha256').update(String(role).toLowerCase().trim()).digest('hex').slice(0, 24)}`;
+    const raw = await getRedisClient().get(key);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch (e) {
+    logger.warn({ err: e.message }, 'jd_intel cache read failed');
+    return null;
+  }
+}
+async function setCachedJdIntel(role, intel) {
+  if (!role || !intel) return;
+  try {
+    const key = `jd_intel:${crypto.createHash('sha256').update(String(role).toLowerCase().trim()).digest('hex').slice(0, 24)}`;
+    await getRedisClient().set(key, JSON.stringify(intel), 'EX', JD_INTEL_TTL_SEC);
+  } catch (e) {
+    logger.warn({ err: e.message }, 'jd_intel cache write failed');
+  }
+}
 
 const SEV = { CRITICAL: 3, MEDIUM: 2, MINOR: 1 };
 
@@ -131,8 +160,16 @@ Return JSON with a score per bullet index. No other text.`;
 // alone; skills/bullets side is regex).
 async function scoreRoleFit({ resume_json, role }) {
   let intel;
+  let cacheHit = false;
   try {
-    intel = await extractKeywords({ jdRole: role });
+    intel = await getCachedJdIntel(role);
+    if (intel) {
+      cacheHit = true;
+    } else {
+      intel = await extractKeywords({ jdRole: role });
+      // Fire-and-forget cache write; failure to cache is non-fatal.
+      setCachedJdIntel(role, intel).catch(() => {});
+    }
   } catch (e) {
     logger.warn({ err: e.message }, 'role-fit: jd_intel extraction failed');
     return { earned: 0, max: 2.0, issues: [], meta: { skipped: true, err: e.message } };
@@ -192,6 +229,7 @@ async function scoreRoleFit({ resume_json, role }) {
       skills_coverage: Math.round(skillsCoverage * 100),
       bullets_coverage: Math.round(bulletsCoverage * 100),
       missing_keywords: missingKeywords,
+      cache_hit: cacheHit,
     },
   };
 }

@@ -3,10 +3,23 @@
 // verified `payment_link.paid` event we fulfil: regenerate the clean PDF and
 // push it to the student. Idempotent against Razorpay's retries.
 const express = require('express');
-const { verifyWebhookSignature } = require('../payment/razorpay');
+const { verifyWebhookSignature, UNLOCK_AMOUNT_PAISE } = require('../payment/razorpay');
 const { fulfillPaymentByMode } = require('../payment/dispatch');
 
 const router = express.Router();
+
+// Server-side amount check. HMAC prevents outsider forgery, but a MITM'd
+// client could theoretically swap the paylink URL before it reaches the
+// student for one with a smaller amount. Razorpay reports both the LINK
+// amount and the PAYMENT amount — the payment amount is the ground truth
+// of what the student actually paid. Reject if it doesn't match ₹49 exactly.
+function verifyAmountPaise(amountPaise, currency) {
+  if (currency && String(currency).toUpperCase() !== 'INR') return { ok: false, why: `currency=${currency}` };
+  const n = Number(amountPaise);
+  if (!Number.isFinite(n) || n <= 0) return { ok: false, why: 'amount not finite/positive' };
+  if (n !== UNLOCK_AMOUNT_PAISE) return { ok: false, why: `paise=${n} !== ${UNLOCK_AMOUNT_PAISE}` };
+  return { ok: true };
+}
 
 router.post('/', express.raw({ type: 'application/json' }), async (req, res) => {
   const sig = req.headers['x-razorpay-signature'];
@@ -36,6 +49,21 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
   const paymentId = paymentEntity.id || linkEntity.id;
   const linkId = linkEntity.id;
   const notes = linkEntity.notes || null; // includes v2 rate-mode flow marker
+  // Prefer the payment.entity.amount (ground truth of what the student paid);
+  // fall back to the link amount if payment isn't in the payload.
+  const paidAmount = paymentEntity.amount != null ? paymentEntity.amount : linkEntity.amount;
+  const paidCurrency = paymentEntity.currency || linkEntity.currency || 'INR';
+
+  const amountCheck = verifyAmountPaise(paidAmount, paidCurrency);
+  if (!amountCheck.ok) {
+    req.log.error({
+      linkId, paymentId,
+      phoneHash: phoneHash ? String(phoneHash).slice(0, 12) : null,
+      paidAmount, paidCurrency,
+      why: amountCheck.why,
+    }, 'razorpay webhook: amount mismatch — refusing to fulfil');
+    return res.status(200).send('amount mismatch');
+  }
 
   try {
     const result = await fulfillPaymentByMode({ phoneHash, paymentId, linkId, notes });

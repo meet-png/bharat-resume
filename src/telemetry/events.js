@@ -25,6 +25,7 @@ const EVENT_NAMES = Object.freeze([
   'clean_pdf_delivered',
   'session_ended',
   'feedback_apply',
+  'rating_submitted', // v1 build post-delivery 1-5 stars (was silently dropped)
   // ── v2 rate mode ─────────────────────────────────────────────
   'mode_selected',
   'rate_pdf_ingested',
@@ -32,6 +33,7 @@ const EVENT_NAMES = Object.freeze([
   'rate_extract_skipped',
   'rate_extract_quality_refused',
   'rate_role_captured',
+  'rate_role_changed',
   'rate_score_computed',
   'rate_payment_link_created',
   'rate_payment_succeeded',

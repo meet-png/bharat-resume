@@ -21,7 +21,7 @@ const { parse } = require('../rate/parse');
 const { extract, flattenForRender, checkExtractionQuality } = require('../rate/extract');
 const { scoreAll } = require('../rate/score-combined');
 const p = require('./rate-prompts');
-const { setSession } = require('../store/redis');
+const { setSession, checkRateLlmCap } = require('../store/redis');
 const { logEvent } = require('../telemetry/events');
 const { createPaymentLink } = require('../payment');
 const logger = require('../logger');
@@ -29,6 +29,18 @@ const logger = require('../logger');
 const CANCEL_RE = /^\s*(cancel|back|exit|quit|stop|reset|switch|change mode)\s*$/i;
 const BUILD_SWITCH_RE = /^\s*(build|1|naya|new|banao|create)\s*$/i;
 const PAY_RE = /^\s*(pay|pay now|unlock|buy|purchase|₹?\s*49|haan pay|yes pay|ok pay)\s*$/i;
+// "change role" at RATE_SHOWING_SCORE keeps the parsed PDF and re-scores
+// against a different role — saves the student from re-uploading if they
+// picked the wrong target the first time.
+const CHANGE_ROLE_RE = /^\s*(change role|new role|different role|role change|role badalna|role badlo|dusra role|another role)\s*$/i;
+// Post-delivery 1-5 stars micro-survey. Same shape as v1's RATE_RE but scoped
+// to rate mode's RATE_DELIVERED state so a bare digit at any earlier state
+// (e.g. someone typing "5" as the number of years experience they want in
+// their bullet) can never trip this.
+const STAR_RE = /^\s*(?:rating\s*|rate\s*)?([1-5])\s*(?:\/\s*5|stars?)?\s*$/i;
+const RESTART_RE = /^\s*(rate|review|score|check|existing)\s*$/i;
+const BUILD_RE = /^\s*(build|banao|create|new|naya|make)\s*$/i;
+const RESET_RE_LOCAL = /^\s*reset\s*$/i;
 
 const UNLOCK_AMOUNT = 49;
 
@@ -53,6 +65,22 @@ async function handleAwaitingPdf({ session, phoneHash, body, phoneFrom, attachme
     if (phoneFrom && sendWhatsApp) {
       try { await sendWhatsApp({ to: phoneFrom, body: p.parsing() }); }
       catch (e) { logger.warn({ err: e.message }, 'rate: parsing-ack send failed'); }
+    }
+
+    // Cost cap check — before we spend any $ on parse/extract. Cap is
+    // per-phone per 24h. Rejecting past the cap is a friendly message,
+    // not a hard-block, so a legit student who tests many resumes at
+    // once can come back tomorrow.
+    const capCheck = await checkRateLlmCap(phoneHash);
+    if (!capCheck.allowed) {
+      logger.warn({
+        phoneHash: phoneHash.slice(0, 12), count: capCheck.count, cap: capCheck.capPerDay,
+      }, 'rate: LLM cap hit — refusing extraction');
+      const hoursLeft = Math.ceil(capCheck.resetInSec / 3600);
+      return (
+        `⏳ Aaj ka rate-mode quota use ho gaya (${capCheck.capPerDay} PDFs/day).\n\n` +
+        `${hoursLeft} ghante baad dobara try karo, ya *"build"* likhkar chat me naya resume banwao.`
+      );
     }
 
     let parsed;
@@ -175,6 +203,24 @@ async function handleShowingScore({ session, phoneHash, body }) {
   const t = String(body || '').trim();
   if (CANCEL_RE.test(t)) return cancelToModeSelect(session, phoneHash);
 
+  if (CHANGE_ROLE_RE.test(t)) {
+    // Reset back to role prompt but KEEP the parsed PDF + resume_json. This
+    // avoids the re-upload penalty when a student picked the wrong target
+    // role the first time. Only clear score-derived fields; source stays.
+    session.rate.role = null;
+    session.rate.score_before = null;
+    session.rate.score_subscores = null;
+    session.rate.score_issues = null;
+    session.rate.score_cache_key = null;
+    // Also clear the payment link — new role = new score = new pay flow.
+    session.payment_link_id = null;
+    session.payment_link_url = null;
+    session.state = STATES.RATE_AWAITING_ROLE;
+    await setSession(phoneHash, session);
+    logEvent({ phoneHash, eventName: 'rate_role_changed', state: session.state });
+    return '🔄 Role change kar rahe hain — parse hui hui PDF wahi hai.\n\n' + p.askForRole();
+  }
+
   if (PAY_RE.test(t)) {
     // Create payment link if not already
     if (!session.payment_link_url) {
@@ -218,8 +264,52 @@ async function handleAwaitingPayment({ session, phoneHash, body }) {
 async function handleDelivered({ session, phoneHash, body }) {
   const t = String(body || '').trim();
   if (CANCEL_RE.test(t)) return cancelToModeSelect(session, phoneHash);
-  // MVP: acknowledge; deeper edit-of-improved is Day 8+.
-  return '✅ Aapka improved resume + audit report deliver ho gaya. Naya start karna ho to "rate" ya "build" type karo.';
+
+  // 1-5 stars micro-survey. Only recorded once per session — subsequent
+  // digits are ignored so a student who mis-types can't overwrite their
+  // rating with a rage-tap.
+  const starMatch = t.match(STAR_RE);
+  if (starMatch && !session.rating) {
+    const rating = Math.max(1, Math.min(5, Number(starMatch[1]) || 0));
+    session.rating = rating;
+    session.rating_at = new Date().toISOString();
+    await setSession(phoneHash, session);
+    logEvent({ phoneHash, eventName: 'rating_submitted', state: session.state, payload: { rating, flow: 'rate' } });
+    if (rating <= 2) {
+      return `Feedback ke liye shukriya 🙏 (${rating}/5). Kya galat laga? Reply karo — hum improve karenge.`;
+    }
+    if (rating === 3) {
+      return `Thanks for the feedback 🙏 (${rating}/5). Kuch specific improve karna chahoge? Reply karo.`;
+    }
+    return `Thanks! 🎉 (${rating}/5). Naya start karna ho to "rate" ya "build" type karo.`;
+  }
+
+  // Post-delivery restart shortcuts — save the student from having to type
+  // "cancel" then a second command. Any of these takes them straight to
+  // the target mode without a mode-select bounce.
+  if (RESTART_RE.test(t)) {
+    await cancelToModeSelect(session, phoneHash); // clears session.rate + payment
+    session.mode = 'rate';
+    session.state = STATES.RATE_AWAITING_PDF;
+    await setSession(phoneHash, session);
+    logEvent({ phoneHash, eventName: 'mode_selected', state: session.state, payload: { mode: 'rate', from: 'rate_delivered' } });
+    return p.askForPdf();
+  }
+  if (BUILD_RE.test(t)) {
+    return switchToBuild(session, phoneHash);
+  }
+  if (RESET_RE_LOCAL.test(t)) {
+    return cancelToModeSelect(session, phoneHash);
+  }
+
+  // Nudge — ask for rating or restart command
+  return (
+    '✅ Aapka improved resume + audit report deliver ho gaya.\n\n' +
+    (session.rating
+      ? '_"rate"_ karo naya resume review karvane, _"build"_ karo naya banane, ya _"cancel"_ / _"reset"_ karo.'
+      : '⭐ Reply *1-5* to rate this experience (30 seconds — helps us improve).\n\n_"rate"_ / _"build"_ / _"cancel"_ likhkar naya start karo.'
+    )
+  );
 }
 
 async function cancelToModeSelect(session, phoneHash) {
