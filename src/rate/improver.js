@@ -20,7 +20,7 @@
 
 const { complete } = require('../llm/client');
 const { config } = require('../config');
-const { verify } = require('./verify');
+const { verify, checkContentPreservation } = require('./verify');
 const { ACTION_VERBS, FILLERS } = require('./lexicon');
 const logger = require('../logger');
 
@@ -81,15 +81,16 @@ const IMPROVER_SYSTEM = `You are a resume improver for Indian college students. 
   - strengthening verbs (Built, Shipped, Designed, Optimized, Scaled)
   - restructuring for impact (verb → what → outcome)
   - pulling in specific tools, tech, and details from ELSEWHERE in the same student's resume when they legitimately belong to that bullet
-  - keeping to 20-30 words
+  - keeping to 20-35 words
 
 HARD RULES — violations will be REJECTED downstream by an automated verifier:
 1. Every number, metric, percentage, currency amount, tool name, framework, company name, and product name in your OUTPUT must appear somewhere in the ORIGINAL bullet or in the FULL RESUME context.
 2. NEVER invent metrics. If a bullet has no measurable outcome in the source, DO NOT add one. Strengthen verb and structure only.
 3. NEVER invent tech that isn't in the student's skills or projects list.
 4. NEVER invent proper nouns (companies, products, orgs).
-5. Preserve the student's specific claims — don't generalize away real specifics.
-6. Match the student's writing voice; don't over-polish.
+5. PRESERVE ALL specifics from the original bullet — do not shorten by deleting content, tools, features, or descriptive detail. A rewrite that drops important content is REJECTED just like a fabrication. If the original bullet is already rich, keep every detail; only restructure and strengthen verbs.
+6. Aim for a rewrite that is AT LEAST 70% the length of the original. Removing filler like "helped with" is fine; removing real specifics is not.
+7. Match the student's writing voice; don't over-polish.
 
 Output STRICT JSON: { "improvements": [{ "i": <bullet index>, "improved": <string>, "changes": <one-line reason ≤80 chars> }] }`;
 
@@ -144,7 +145,7 @@ async function improveSection({ bullets, section, role, sourceText }) {
 
   for (const chunk of chunks) {
     let attempt = 1;
-    let firstFailAtoms = null;
+    let retryGuidance = '';
     let picked = null;
     while (attempt <= 2) {
       let batch;
@@ -154,26 +155,34 @@ async function improveSection({ bullets, section, role, sourceText }) {
           section,
           role,
           sourceText,
-          extraGuidance: attempt === 2 && firstFailAtoms
-            ? `The prior draft added these atoms not present in source: ${firstFailAtoms.join(', ')}. Do NOT add them. Rewrite from scratch, adding NOTHING that isn't in the source.`
-            : '',
+          extraGuidance: attempt === 2 && retryGuidance ? retryGuidance : '',
         });
       } catch (e) {
         logger.warn({ err: e.message, attempt, section }, 'improver LLM call failed');
         break;
       }
-      // Try to verify every bullet in this batch
+      // Verify every bullet in this batch. Two checks:
+      //   1. verify() — no fabricated atoms in output (fabrication guard)
+      //   2. checkContentPreservation() — no atoms/length dropped too far (regression guard)
+      // Either failure treats the whole bullet as needing retry / fallback.
       const perBullet = chunk.map((original, idxInChunk) => {
         const hit = batch.improvements.find((r) => r && r.i === idxInChunk);
         const improved = hit ? String(hit.improved || '').trim() : '';
-        if (!improved) return { original, improved: '', changes: '', verified: false, unverified: [], mode: 'skipped' };
+        if (!improved) return { original, improved: '', changes: '', verified: false, unverified: [], fail_reason: 'empty', mode: 'skipped' };
         const v = verify({ rewritten: improved, original, sourceText });
+        const p = checkContentPreservation({ original, rewritten: improved });
+        const verifiedOk = v.ok && p.ok;
+        const unverified = v.unverified_atoms.map((a) => a.raw);
+        const dropped = p.dropped_atoms.map((a) => a.raw);
         return {
           original,
           improved,
           changes: hit.changes ? String(hit.changes).slice(0, 200) : '',
-          verified: v.ok,
-          unverified: v.unverified_atoms.map((a) => a.raw),
+          verified: verifiedOk,
+          unverified,
+          dropped,
+          word_ratio: p.word_ratio,
+          fail_reason: !v.ok ? 'fabrication' : (!p.ok ? 'over-compression' : ''),
           mode: attempt === 1 ? 'llm' : 'llm-retry',
         };
       });
@@ -182,12 +191,25 @@ async function improveSection({ bullets, section, role, sourceText }) {
       if (!anyFailed) { picked = perBullet; break; }
 
       if (attempt === 1) {
-        // Collect flagged atoms across the batch to guide the retry
-        firstFailAtoms = [];
+        // Collect targeted guidance across the batch. Separate lists so the
+        // retry prompt can address fabrication and over-compression distinctly.
+        const fabricatedAtoms = [];
+        const droppedAtoms = [];
+        const overCompressed = [];
         for (const r of perBullet) {
-          if (!r.verified) firstFailAtoms.push(...r.unverified.slice(0, 3));
+          if (r.fail_reason === 'fabrication') fabricatedAtoms.push(...r.unverified.slice(0, 3));
+          if (r.fail_reason === 'over-compression') {
+            droppedAtoms.push(...r.dropped.slice(0, 3));
+            overCompressed.push(`bullet #${chunk.indexOf(r.original)} (${r.word_ratio.toFixed(2)}× length)`);
+          }
         }
-        firstFailAtoms = [...new Set(firstFailAtoms)].slice(0, 8);
+        const fabricatedUnique = [...new Set(fabricatedAtoms)].slice(0, 8);
+        const droppedUnique = [...new Set(droppedAtoms)].slice(0, 8);
+        const parts = [];
+        if (fabricatedUnique.length) parts.push(`Prior draft added atoms not in source: ${fabricatedUnique.join(', ')}. Do NOT add them.`);
+        if (droppedUnique.length) parts.push(`Prior draft dropped specifics from source: ${droppedUnique.join(', ')}. Keep them.`);
+        if (overCompressed.length) parts.push(`These bullets were over-compressed: ${overCompressed.join('; ')}. Preserve original length and specifics.`);
+        retryGuidance = parts.join(' ');
         attempt++;
         continue;
       }
@@ -197,16 +219,20 @@ async function improveSection({ bullets, section, role, sourceText }) {
     }
 
     // For any bullet still unverified, fall back
-    if (!picked) picked = chunk.map((original) => ({ original, improved: '', changes: '', verified: false, unverified: [], mode: 'skipped' }));
+    if (!picked) picked = chunk.map((original) => ({ original, improved: '', changes: '', verified: false, unverified: [], fail_reason: 'skipped', mode: 'skipped' }));
     for (const r of picked) {
       if (!r.verified) {
         const safe = safeFallback(r.original);
         const changed = looksImprovedByFallback(r.original, safe);
+        const why = r.fail_reason === 'fabrication' ? 'LLM tried to invent atoms; falling back to safe verb-strengthening.'
+                  : r.fail_reason === 'over-compression' ? 'LLM over-compressed the bullet; keeping original with verb-strengthening only.'
+                  : 'safe fallback';
         r.improved = changed ? safe : r.original;
-        r.changes = changed ? 'safe fallback: replaced filler opening' : 'no safe change available';
+        r.changes = changed ? `${why} Replaced filler opening.` : why;
         r.mode = changed ? 'safe-fallback' : 'unchanged';
         r.verified = true; // safe-fallback + unchanged both trivially verified
         r.unverified = [];
+        r.dropped = [];
       }
     }
     for (const r of picked) results[cursor++] = r;

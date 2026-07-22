@@ -58,6 +58,52 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 
 ## 3. Session log
 
+### Session — 2026-07-21 (v2 Day 6: content-preservation check + audit report generator, Claude Opus 4.7)
+
+**Context:** Day 5 (`84db50b`) flagged an over-compression regression on Meet's line 48 — the improver LLM dropped "free-edit loop" and "role-tailored rewriter mines GitHub READMEs" while shortening for style. Day 6 goal: close that gap AND ship the student-facing audit report.
+
+**What Day 6 shipped:**
+
+1. **`checkContentPreservation({ original, rewritten })`** added to `src/rate/verify.js`. Two guards:
+   - **Atom preservation ≥ 85%**: extract atoms (numbers, tech tokens, proper nouns) from BOTH; count atoms in original that don't appear in rewrite; reject if drop rate > 15%.
+   - **Word ratio ≥ 65%**: rewrite word-count must be at least 65% of original. Catches Meet's line 48 at 18/34 = 53% word ratio.
+   - Returns `{ ok, dropped_atoms, word_ratio, atom_kept_ratio, details }`. Different failure mode than fabrication but same retry-then-fallback path in improver.
+
+2. **`src/rate/improver.js`** updated:
+   - Verify pipeline now runs `verify()` + `checkContentPreservation()`. Either failure triggers retry.
+   - Retry guidance is targeted: fabrication failures cite the flagged atoms with "do not add"; over-compression failures cite the dropped specifics with "keep them" and name the offending bullets by index with their word ratio.
+   - `IMPROVER_SYSTEM` prompt hardened with explicit rules (5, 6): "preserve all specifics from original", "aim for ≥ 70% of original length".
+   - Fallback tracks `fail_reason` in the audit trail (fabrication vs over-compression vs skipped) so the audit report can explain what happened.
+
+3. **`src/rate/audit.js`** — student-facing report generator:
+   - `renderAuditText({ audit, role, scoreBefore, scoreAfter, meta })` → `{ text, chunks, char_count, tally }`.
+   - Header: "BHARAT RESUME — Resume Audit", target role, score before → after, mode tally ("9 bullets improved by AI + auto-verified; 3 bullets improved after 1 retry"), moat statement.
+   - Per-bullet BEFORE / AFTER quotes, source_line anchors, entry labels (e.g. "The Velvet Bean", "DM-to-Deal — Autonomous AI Sales Agent"), change reasons.
+   - Auto-chunks on section boundaries when total > 3900 chars (below WhatsApp's 4096 limit with headroom).
+   - `renderAuditJson({...})` returns the same content structured for a future PDF renderer.
+
+4. **`scripts/rate-improve.js`** — added `--audit` and `--score-both` flags. Full pipeline now: parse → extract → improve → re-score before/after → render audit report. Displays chunks as they'd appear to the student on WhatsApp.
+
+**Test evidence:**
+
+Regression check — Meet's line 48 (the Day 5 over-compression):
+- Day 5:  BEFORE 34 words → AFTER 18 words (dropped "free-edit loop", "role-tailored rewriter mines GitHub READMEs without fabricating data").
+- Day 6:  first pass rejected on preservation → RETRY with guidance → AFTER preserves all specifics. Retry icon `↻` in the diff. Verifier + preservation both pass.
+
+Full pipeline runs:
+| PDF | Role | Score before → after | Bullets | LLM 1st pass | Retry | Fallback | Unverified | Report size |
+|---|---|---|---|---|---|---|---|---|
+| Aditya's | Backend SWE | **8.0 → 8.2** (Δ +0.2) | 7 | 7 | 0 | 0 | **0** | 3045 chars, 1 chunk |
+| Meet's | Data Analyst | **9.3 → 9.3** (Δ +0.0) | 12 | 9 | 3 | 0 | **0** | 6351 chars, 2 chunks |
+
+**Meet's Δ +0.0 is a feature, not a bug.** His original resume was already at ceiling on all measurable subscores; improvements are stylistic restructures that don't move the score, and the report honestly reflects that. Aditya's Δ +0.2 is a real gain from LLM legitimately adding MongoDB (from his skills) and Java+Python context (from his skills) to weak bullets — every added detail cites a source line.
+
+Meet's 3 retries all fired on Bharat Resume project bullets (lines 44, 46, 48) — dense content that the first pass wanted to shorten for style. Preservation check caught all three; retry produced full-length rewrites; every atom verified. This is the moat working end-to-end.
+
+**Files touched (`feature/v2-rate-mode`):** `src/rate/verify.js`, `src/rate/improver.js`, `src/rate/audit.js` (new), `src/rate/README.md`, `scripts/rate-improve.js`, `PROGRESS.md`.
+
+**Day 7 next:** wire rate mode into the state machine — new `RATE_MODE_START` / `RATE_AWAITING_PDF` / `RATE_AWAITING_ROLE` / `RATE_SCORING` / `RATE_SHOWING_SCORE` / `RATE_IMPROVING` / `RATE_PREVIEW_SENT` / `RATE_PAID` states in `src/state/router.js`. This is the merge-day work touching v1 (mode-aware refactor of yesterday's guardrails: `REVIEW_EXISTING_RE` fires only in build mode; non-text refusal in `whatsapp.js` allows PDF only when `state === RATE_AWAITING_PDF`).
+
 ### Session — 2026-07-21 (v2 Day 5: LLM improver with verifier gate + safe fallback, Claude Opus 4.7)
 
 **Context:** Day 4 shipped the fabrication verifier (`2d8f523`). Day 5 goal: the improver that USES the verifier — an LLM rewriter for every bullet, gated by verify.js on the way out. Nothing that fails verification reaches the student.

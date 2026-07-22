@@ -13,6 +13,7 @@ Read this in order:
 - **`scripts/rate-verify.test.js`** — regression suite: 10 legitimate rewrites (must PASS) + 10 fabrication attempts (must FAIL). Wired into `.runtime/check.js` and exposed as `npm run test:rate-verify`. If a fabrication ever slips through, this catches it BEFORE commit.
 - **improver.js** — LLM rewriter with mandatory verifier gate. `improveSection(...) → { improved: [{ original, improved, mode, verified, changes }] }`. Batches bullets by section (up to 8 per call). Every output bullet passes through `verify.js`. On failure, retries ONCE with an even stricter prompt that cites the flagged atoms; on second failure, falls back to `safeFallback()` — a deterministic verb-strengthener that only replaces filler openings (Worked on → Built, Responsible for → Owned, etc.) and never adds content.
 - **improve-resume.js** — whole-resume improvement pipeline. `improveResume(input) → { resume_json_improved, audit, meta }`. Sections run in parallel; verifier runs per-bullet inside each section so a fabrication in one section can't propagate. `audit[]` is what the audit-report generator consumes: `{ section, entry_label, source_line, original, improved, mode, verified, unverified, changes }` per bullet.
+- **audit.js** — student-facing report generator. `renderAuditText({ audit, role, scoreBefore, scoreAfter, meta }) → { text, chunks, char_count, tally }` produces WhatsApp-friendly text with BEFORE/AFTER quotes per bullet, source_line anchors, entry labels, and change reasons. Auto-chunks on section boundaries when >3900 chars. `renderAuditJson(...)` returns the same content structured for a future PDF renderer.
 
 ## Day 1 evidence
 
@@ -48,7 +49,7 @@ Role Fit correctly LOW for Meet at "Backend SWE" (his resume is Python/data-focu
 - **Achievements vs. certifications overlap** — soft semantic issue; sometimes the LLM buckets a "won hackathon" line under achievements when the source uses "CERTIFICATIONS". Fix if it hurts a real student.
 - **Multi-column detection heuristic**: tuned at 25% of lines showing internal gaps > 15% page width. Not yet tested against a Canva 2-column template — need a fixture.
 - **Role Fit non-determinism**: jd_intel comes from a single LLM call that varies slightly run-to-run. Cache jd_intel by `sha256(role)` in Redis (30d TTL) on the caller side to lock this down.
-- **Improver over-compression** (Day 5 observation): the LLM sometimes shortens a rich bullet for style and drops meaningful specifics (e.g. Meet's line 48 lost "free-edit loop" and "role-tailored rewriter" details). The verifier doesn't guard against this — nothing was invented, just deleted. Add a content-preservation post-check that rejects the rewrite when it drops more than N atoms from the original.
+- **~~Improver over-compression~~** — SHIPPED in Day 6. `checkContentPreservation()` in `verify.js` rejects rewrites that drop >15% of source atoms or shrink below 65% of original length. Improver retries once with targeted guidance, then falls back to `safeFallback()`.
 
 ## Bench
 
@@ -69,4 +70,7 @@ npm run test:rate-verify
 
 # Day 5 — full improve pipeline: parse → extract → improve → per-bullet diff + verifier verdicts
 node scripts/rate-improve.js <path.pdf> --role "Data Analyst"
+
+# Day 6 — full pipeline WITH re-score (before/after) and audit report
+node scripts/rate-improve.js <path.pdf> --role "Data Analyst" --audit
 ```

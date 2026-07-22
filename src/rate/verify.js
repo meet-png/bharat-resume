@@ -409,11 +409,103 @@ function safeAssertVerified(v, ctx = {}) {
   return false;
 }
 
+// ─── Content preservation check ──────────────────────────────────────────
+// Complementary to verify() — verify() guards against FABRICATION (atoms in
+// the OUTPUT not in the source). checkContentPreservation() guards against
+// DELETION (atoms in the ORIGINAL that got dropped in the OUTPUT). Both
+// failure modes hurt the student:
+//   fabrication → interview-killer (can't defend a made-up number)
+//   deletion    → weaker resume (lost the specifics that made the bullet good)
+//
+// Contract:
+//   checkContentPreservation({ original, rewritten, options? })
+//     → { ok: bool, dropped_atoms: [...], word_ratio: number, details: [...] }
+//
+// ok: true when
+//   (a) every content atom from ORIGINAL appears in REWRITTEN (fuzzy/canonical), AND
+//   (b) rewritten word count ≥ WORD_RATIO_MIN × original word count
+//
+// Defaults tuned on Meet's line 48 regression (34-word bullet compressed to
+// 18 words, dropping "free-edit loop" + "role-tailored rewriter mines
+// GitHub READMEs without fabricating data"). WORD_RATIO_MIN 0.65 catches
+// that at 18/34 = 0.53; ATOM_MIN_KEPT 0.85 catches the atom drops.
+const WORD_RATIO_MIN_DEFAULT = 0.65;
+const ATOM_MIN_KEPT_DEFAULT = 0.85;
+
+function extractAllContentAtoms(text) {
+  const numeric = extractNumericAtoms(text);
+  const tech = extractTechAtoms(text);
+  const proper = extractProperNouns(text, tech);
+  // Dedupe across kinds by (kind|token)
+  const seen = new Set();
+  const out = [];
+  for (const a of [...numeric, ...tech, ...proper]) {
+    const key = `${a.kind}|${a.token || a.raw.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(a);
+  }
+  return out;
+}
+
+function atomPresentIn(atom, targetText, targetAtoms) {
+  const targetLower = String(targetText || '').toLowerCase();
+  return atomInText(atom, targetLower, targetAtoms);
+}
+
+function checkContentPreservation({ original, rewritten, options = {} }) {
+  const orig = String(original || '');
+  const out = String(rewritten || '');
+  if (!orig.trim() || !out.trim()) {
+    return { ok: true, dropped_atoms: [], word_ratio: 1, details: ['empty-input'] };
+  }
+  if (out.trim() === orig.trim()) {
+    return { ok: true, dropped_atoms: [], word_ratio: 1, details: ['identical-passthrough'] };
+  }
+
+  const wordsOrig = (orig.match(/\S+/g) || []).length;
+  const wordsOut = (out.match(/\S+/g) || []).length;
+  const word_ratio = wordsOrig === 0 ? 1 : wordsOut / wordsOrig;
+
+  const origAtoms = extractAllContentAtoms(orig);
+  const outAtoms = {
+    numbers: extractNumericAtoms(out),
+    tech: extractTechAtoms(out),
+  };
+  const dropped = [];
+  for (const a of origAtoms) {
+    if (!atomPresentIn(a, out, outAtoms)) dropped.push(a);
+  }
+  const kept = origAtoms.length - dropped.length;
+  const atomKeptRatio = origAtoms.length === 0 ? 1 : kept / origAtoms.length;
+
+  const wordMin = options.word_ratio_min ?? WORD_RATIO_MIN_DEFAULT;
+  const atomMin = options.atom_min_kept ?? ATOM_MIN_KEPT_DEFAULT;
+
+  const wordOk = word_ratio >= wordMin;
+  const atomOk = atomKeptRatio >= atomMin;
+  const ok = wordOk && atomOk;
+
+  const details = [];
+  if (!wordOk) details.push(`word_ratio ${word_ratio.toFixed(2)} < ${wordMin}`);
+  if (!atomOk) details.push(`atom_kept ${atomKeptRatio.toFixed(2)} < ${atomMin} — dropped: ${dropped.map((a) => a.raw).slice(0, 5).join(', ')}`);
+
+  return {
+    ok,
+    dropped_atoms: dropped,
+    word_ratio,
+    atom_kept_ratio: atomKeptRatio,
+    details,
+  };
+}
+
 module.exports = {
   verify,
   safeAssertVerified,
+  checkContentPreservation,
   // Exposed for tests + future improvements
   extractNumericAtoms,
   extractTechAtoms,
   extractProperNouns,
+  extractAllContentAtoms,
 };
