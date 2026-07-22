@@ -73,4 +73,8 @@ node scripts/rate-improve.js <path.pdf> --role "Data Analyst"
 
 # Day 6 — full pipeline WITH re-score (before/after) and audit report
 node scripts/rate-improve.js <path.pdf> --role "Data Analyst" --audit
+
+# Day 7 — end-to-end state machine smoke: cold entry → mode select → PDF → role → score → pay → cancel → build switch.
+#         Simulates a real WhatsApp conversation without hitting WhatsApp. ~30s.
+node scripts/rate-flow.smoke.js [path.pdf]
 ```

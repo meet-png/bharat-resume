@@ -58,6 +58,58 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 
 ## 3. Session log
 
+### Session — 2026-07-21 (v2 Day 7: rate mode wired into state machine, Claude Opus 4.7)
+
+**Context:** Days 1-6 built rate-mode's pipeline (parse → extract → score → improve → verify → audit) as a set of pure functions callable from the CLI. Day 7 goal: wire it into the WhatsApp state machine so a real message → PDF upload → score → pay flow works. This is the merge-day work — the one place v2 has to touch v1 code — kept surgical.
+
+**What Day 7 shipped:**
+
+1. **`src/state/states.js`** — added new mode-select + 7 rate states:
+   - `AWAITING_MODE_SELECT` — very first state for a new session (replaces immediate `AWAITING_CONFIRM_START`)
+   - `RATE_AWAITING_PDF`, `RATE_AWAITING_ROLE`, `RATE_SCORING`, `RATE_SHOWING_SCORE`, `RATE_AWAITING_PAYMENT`, `RATE_IMPROVING`, `RATE_DELIVERED`
+   - Exported `RATE_STATES` set for the main router / whatsapp.js to test membership.
+   - Build states are unchanged and untouched.
+
+2. **`src/state/rate-prompts.js`** (new) — all rate-mode message templates in one file, isolated from `prompts.js`. Includes `renderScoreGlimpse({ score, subscores, issues, role })` — the free-glimpse rendering with top-3 issues + payment CTA.
+
+3. **`src/state/rate-router.js`** (new) — parallel state machine for rate mode. `handleRateInner({ session, phoneHash, body, phoneFrom, attachment, sendWhatsApp })` returns a reply (string or `{text, media}`) same shape as build mode. Handles:
+   - PDF attachment on `RATE_AWAITING_PDF` → parse → refuse if layer-3 → extract → advance to `RATE_AWAITING_ROLE`
+   - Text on `RATE_AWAITING_ROLE` → capture role → run `scoreAll()` → send glimpse → `RATE_SHOWING_SCORE`
+   - `pay` on `RATE_SHOWING_SCORE` → create Cashfree payment link (tagged with `flow: 'rate'` for the webhook fulfiller in Day 8) → `RATE_AWAITING_PAYMENT`
+   - `cancel` from any rate state → back to `AWAITING_MODE_SELECT`, clears `session.rate` and any payment link
+   - Interstitial acks ("parsing…", "scoring in progress…") sent as best-effort via `sendWhatsApp` on long steps.
+
+4. **`src/state/router.js`** — surgical additions:
+   - `newSession()` now sets `mode: null, rate: null`.
+   - `handleInner` new-session path lands in `AWAITING_MODE_SELECT`.
+   - Mode selection block at handleInner top: `MODE_BUILD_RE` (1 / build / naya / banao / new / create) → build mode; `MODE_RATE_RE` (2 / rate / review / score / mera resume dekh) → rate mode; unprompted PDF upload auto-switches to rate.
+   - Rate dispatch: `if (session.mode === 'rate' || RATE_STATES.has(session.state)) return handleRateInner(...)` returns BEFORE build-mode guardrails run.
+   - **Mode-aware `REVIEW_EXISTING_RE`** — the "we don't rate resumes" refusal from 2026-07-17 now fires ONLY in `mode === 'build'`; in rate mode it would refuse the exact intent the mode is designed for. Refusal text also nudges to type "rate" for the new feature.
+   - `handle()` signature extended: accepts `attachment` in addition to `body`.
+
+5. **`src/routes/whatsapp.js`** — mode-aware attachment handling:
+   - Non-text message no longer refused unconditionally. Instead: check `session.state` — `RATE_AWAITING_PDF` or `AWAITING_MODE_SELECT` (auto-switch) accept documents; everything else refuses.
+   - Only `application/pdf`, `.docx`, `.doc` mimes accepted (photo/audio/video always refused).
+   - Downloads via new `downloadMedia()` in `src/messaging/meta.js` — 10MB cap, bearer-auth'd 2-step Meta CDN fetch.
+   - Passes `{ buffer, filename, mimeType, bytes }` as `attachment` param into `handle()`.
+
+6. **`src/messaging/meta.js`** — added `downloadMedia(mediaId, { maxBytes })` — 2-step Meta CDN download (`GET /{media-id}` → `GET url`) with bearer auth on both. Enforces file-size cap defensively (OOM guard on hostile PDFs).
+
+7. **`scripts/rate-flow.smoke.js`** — end-to-end state machine smoke. Simulates a real WhatsApp conversation without hitting WhatsApp: cold entry → mode select → PDF upload (real Meet's resume) → role → score glimpse → pay → cancel → build switch. 7 assertions, all pass.
+
+**Test evidence:**
+- Rate-flow smoke: **7/7 assertions pass** end-to-end. Meet's real 621-word PDF parses, extracts, scores 9.3/10 for "Data Analyst", produces a real Cashfree TEST payment link on `pay`, cancels cleanly, switches to build mode cleanly.
+- Fabrication regression suite: **20/20 still green** — no cross-contamination from state-machine changes.
+- Zero v1 build-mode code changed except the surgical `newSession()` mode field and the top of `handleInner`. Build flow is untouched.
+
+**Known non-blockers surfaced:**
+- Interstitial acks (`sendWhatsApp` calls in rate-router for "parsing…" / "scoring…") fail in test env (Twilio smoke rejects test-phone routing). Wrapped in try/catch so non-fatal; production has a real WA provider.
+- Telemetry emits `logEvent: missing phoneHash or unknown event — skipped` warnings for new rate-mode event names (`mode_selected`, `rate_pdf_ingested`, `rate_role_captured`, `rate_score_computed`, `rate_payment_link_created`, `rate_cancelled`). Cosmetic — add to allowlist in Day 8.
+
+**Files touched (`feature/v2-rate-mode`):** `src/state/states.js`, `src/state/rate-prompts.js` (new), `src/state/rate-router.js` (new), `src/state/router.js`, `src/routes/whatsapp.js`, `src/messaging/meta.js`, `scripts/rate-flow.smoke.js` (new), `src/rate/README.md`, `PROGRESS.md`.
+
+**Day 8 next:** payment webhook fulfillment for rate mode. When Cashfree webhook fires with `flow: 'rate'`, invoke `improveResume()` → render via v1's Handlebars template → watermark clean → upload → deliver PDF + audit report over WhatsApp. Also: add new event names to telemetry allowlist.
+
 ### Session — 2026-07-21 (v2 Day 6: content-preservation check + audit report generator, Claude Opus 4.7)
 
 **Context:** Day 5 (`84db50b`) flagged an over-compression regression on Meet's line 48 — the improver LLM dropped "free-edit loop" and "role-tailored rewriter mines GitHub READMEs" while shortening for style. Day 6 goal: close that gap AND ship the student-facing audit report.

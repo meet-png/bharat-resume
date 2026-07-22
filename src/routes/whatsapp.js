@@ -12,10 +12,32 @@ const express = require('express');
 const { config } = require('../config');
 const { verifyMetaSignature } = require('../security/metaSignature');
 const { hashPhone, shortHash } = require('../security/hash');
-const { markMessageProcessed } = require('../store/redis');
+const { markMessageProcessed, getSession } = require('../store/redis');
 const { sendWhatsApp } = require('../messaging');
+const { downloadMedia } = require('../messaging/meta');
 const { handle } = require('../state/router');
+const { RATE_STATES, STATES } = require('../state/states');
 const logger = require('../logger');
+
+// Attachment types we accept in rate mode. Everything else is refused at the
+// transport boundary — matches the mimes rate-mode's parser (pdfjs + mammoth)
+// can handle.
+const ACCEPTED_MIMES = new Set([
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
+  'application/msword', // legacy .doc — mammoth handles most
+]);
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10MB
+
+// Does the session's current state accept a PDF/DOCX upload right now?
+// True in RATE_AWAITING_PDF (the natural entry) OR when session has no mode
+// yet AND is at AWAITING_MODE_SELECT (auto-switch on unprompted upload).
+function stateAcceptsAttachment(session) {
+  if (!session) return true; // brand-new phone — auto-treat as rate entry
+  if (session.state === STATES.RATE_AWAITING_PDF) return true;
+  if (session.state === STATES.AWAITING_MODE_SELECT) return true;
+  return false;
+}
 
 const router = express.Router();
 
@@ -92,27 +114,60 @@ async function processInbound(msg) {
   const body = (msg.type === 'text' && msg.text && msg.text.body) || '';
   logger.info({ from: shortHash(phoneHash), bodyLen: body.length, type: msg.type }, 'inbound whatsapp (meta)');
 
-  // Non-text messages (document / image / audio / video / sticker / etc.):
-  // students frequently send their existing resume PDF/DOCX/photo hoping we'll
-  // rate or modify it. We don't do that — only NEW resume generation. Refuse
-  // formally and point them at the chat flow. Do NOT run the state machine
-  // for these; an empty text body would either short-circuit or produce a
-  // confusing generic response. Handle here at the transport boundary.
+  // Non-text messages: two paths now.
+  // (a) Rate mode expects PDF/DOCX uploads at RATE_AWAITING_PDF — accept and
+  //     download from Meta CDN, hand off to the state machine as `attachment`.
+  //     A brand-new phone auto-enters rate mode on unprompted upload.
+  // (b) All other non-text messages (photos, voice, video, sticker, wrong
+  //     format at wrong time) are refused at this transport boundary with a
+  //     mode-aware nudge.
+  let attachment = null;
   if (msg.type !== 'text') {
-    logger.info({ from: shortHash(phoneHash), type: msg.type }, 'non-text message refused (attachment)');
-    await sendWhatsApp({
-      to: phoneFrom,
-      body:
-        'Namaste 🙏 File / photo / voice note nahi le sakta abhi.\n\n' +
-        'Ye bot sirf *naya resume BANATA* hai — existing resume ko rate, score, ya modify karne ka option nahi hai.\n\n' +
-        'Naya banane ke liye, chat me apne details type kariye. Type "reset" if you want to start fresh.',
-    });
-    return;
+    const session = await getSession(phoneHash).catch(() => null);
+    const inRateOrEntry = stateAcceptsAttachment(session);
+
+    // Only documents (PDF / DOCX) are ever accepted. Photo/audio/video/sticker
+    // never carry a legitimate rate-mode payload, so refuse those unconditionally.
+    const doc = (msg.type === 'document') ? msg.document : null;
+    const mime = doc && doc.mime_type;
+    if (!doc || !ACCEPTED_MIMES.has(mime) || !inRateOrEntry) {
+      logger.info({
+        from: shortHash(phoneHash), type: msg.type, mime,
+        state: session?.state, mode: session?.mode,
+      }, 'attachment refused');
+      const refuseText = (session && session.mode === 'build')
+        ? 'Namaste 🙏 Build mode me file/photo nahi le sakta. Naya resume banane ke liye details type karo. Type "rate" if you want to switch to rate mode instead.'
+        : (msg.type !== 'document')
+        ? 'Rate mode me PDF ya Word (.docx) file chahiye — photo/audio/video kaam nahi karega.'
+        : `File format supported nahi hai (${mime || 'unknown'}). PDF ya .docx bhejo.`;
+      await sendWhatsApp({ to: phoneFrom, body: refuseText });
+      return;
+    }
+
+    // Download the attachment. Failure at this stage is a Meta-CDN issue;
+    // tell the student to try again rather than silently hanging.
+    try {
+      const dl = await downloadMedia(doc.id, { maxBytes: MAX_ATTACHMENT_BYTES });
+      attachment = {
+        buffer: dl.buffer,
+        filename: doc.filename || 'resume.pdf',
+        mimeType: dl.mimeType || mime,
+        bytes: dl.fileSize,
+      };
+      logger.info({ from: shortHash(phoneHash), bytes: attachment.bytes, mime: attachment.mimeType }, 'attachment downloaded');
+    } catch (e) {
+      logger.error({ err: e.message, from: shortHash(phoneHash) }, 'attachment download failed');
+      await sendWhatsApp({
+        to: phoneFrom,
+        body: '⛔ File download nahi ho paayi (Meta CDN issue). 30 seconds baad file dobara bhejo, ya "cancel" karo.',
+      });
+      return;
+    }
   }
 
   let reply;
   try {
-    reply = await handle({ phoneHash, body, phoneFrom });
+    reply = await handle({ phoneHash, body, phoneFrom, attachment });
   } catch (e) {
     logger.error({ err: e.message }, 'router handle failed');
     reply = 'Server pe kuch issue hai. 30s baad try kariye.';
