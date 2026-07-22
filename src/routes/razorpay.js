@@ -4,7 +4,7 @@
 // push it to the student. Idempotent against Razorpay's retries.
 const express = require('express');
 const { verifyWebhookSignature } = require('../payment/razorpay');
-const { fulfillPayment } = require('../payment/fulfill');
+const { fulfillPaymentByMode } = require('../payment/dispatch');
 
 const router = express.Router();
 
@@ -37,10 +37,10 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
   const linkId = linkEntity.id;
 
   try {
-    const result = await fulfillPayment({ phoneHash, paymentId, linkId });
+    const result = await fulfillPaymentByMode({ phoneHash, paymentId, linkId });
     return res.status(200).json(result);
   } catch (e) {
-    req.log.error({ err: e.message }, 'fulfillPayment failed');
+    req.log.error({ err: e.message }, 'fulfillment failed');
     return res.status(500).send('processing error');
   }
 });

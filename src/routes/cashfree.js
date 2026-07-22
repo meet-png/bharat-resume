@@ -19,7 +19,7 @@
 // the payload shape in logs.
 const express = require('express');
 const { verifyWebhookSignature, getPhoneHashByLinkId } = require('../payment/cashfree');
-const { fulfillPayment } = require('../payment/fulfill');
+const { fulfillPaymentByMode } = require('../payment/dispatch');
 
 const router = express.Router();
 
@@ -105,10 +105,10 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
     // payment — that's a theoretical duplicate-fulfilment risk if BOTH event
     // types were subscribed. Meet's account only exposes success payment, so
     // this doesn't happen in practice.
-    const result = await fulfillPayment({ phoneHash, paymentId: String(paymentId), linkId });
+    const result = await fulfillPaymentByMode({ phoneHash, paymentId: String(paymentId), linkId });
     return res.status(200).json(result);
   } catch (e) {
-    req.log.error({ err: e.message }, 'fulfillPayment failed');
+    req.log.error({ err: e.message }, 'fulfillment failed');
     return res.status(500).send('processing error');
   }
 });

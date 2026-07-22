@@ -14,6 +14,7 @@ Read this in order:
 - **improver.js** — LLM rewriter with mandatory verifier gate. `improveSection(...) → { improved: [{ original, improved, mode, verified, changes }] }`. Batches bullets by section (up to 8 per call). Every output bullet passes through `verify.js`. On failure, retries ONCE with an even stricter prompt that cites the flagged atoms; on second failure, falls back to `safeFallback()` — a deterministic verb-strengthener that only replaces filler openings (Worked on → Built, Responsible for → Owned, etc.) and never adds content.
 - **improve-resume.js** — whole-resume improvement pipeline. `improveResume(input) → { resume_json_improved, audit, meta }`. Sections run in parallel; verifier runs per-bullet inside each section so a fabrication in one section can't propagate. `audit[]` is what the audit-report generator consumes: `{ section, entry_label, source_line, original, improved, mode, verified, unverified, changes }` per bullet.
 - **audit.js** — student-facing report generator. `renderAuditText({ audit, role, scoreBefore, scoreAfter, meta }) → { text, chunks, char_count, tally }` produces WhatsApp-friendly text with BEFORE/AFTER quotes per bullet, source_line anchors, entry labels, and change reasons. Auto-chunks on section boundaries when >3900 chars. `renderAuditJson(...)` returns the same content structured for a future PDF renderer.
+- **fulfill.js** — rate-mode payment fulfillment. `fulfillRatePayment({ phoneHash, paymentId, linkId })` mirrors v1's `payment/fulfill.js` contract: idempotency via `markPaymentProcessed`, persists `session.paid = true` before delivery work, runs `improveResume` → re-scores → renders via v1's `deliverPdf(session, phoneHash, { clean: true })` → sends improved PDF + audit report chunks over WhatsApp → advances state to `RATE_DELIVERED`. Delivery failures release the dedupe lock so Cashfree/Razorpay retries re-run.
 
 ## Day 1 evidence
 
@@ -77,4 +78,10 @@ node scripts/rate-improve.js <path.pdf> --role "Data Analyst" --audit
 # Day 7 — end-to-end state machine smoke: cold entry → mode select → PDF → role → score → pay → cancel → build switch.
 #         Simulates a real WhatsApp conversation without hitting WhatsApp. ~30s.
 node scripts/rate-flow.smoke.js [path.pdf]
+
+# Day 8 — payment webhook fulfillment smoke: seeds a rate session as if
+#         the student just paid, calls fulfillPaymentByMode() the same way
+#         the Cashfree/Razorpay webhook would, verifies improved PDF is
+#         uploaded to Supabase + audit report chunks captured. ~30-45s.
+node scripts/rate-fulfill.smoke.js [path.pdf] [--role "Data Analyst"]
 ```

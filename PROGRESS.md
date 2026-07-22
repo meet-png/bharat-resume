@@ -58,6 +58,54 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 
 ## 3. Session log
 
+### Session — 2026-07-23 (v2 Day 8: rate-mode payment webhook fulfillment — pipeline is now end-to-end paid, Claude Opus 4.7)
+
+**Context:** Days 1-7.5 built parse → extract → score → improve → verify → audit → glimpse → pay-link. Day 8 goal: close the loop by wiring the paid webhook to actually improve, re-score, render the clean PDF, upload, and deliver both the PDF and the audit report over WhatsApp. Meet's rate-mode pilot flow is now paid-shippable.
+
+**What Day 8 shipped:**
+
+1. **`src/telemetry/events.js`** — extended `EVENT_NAMES` allowlist with rate-mode events. Kills the "unknown event — skipped" warnings from Day 7:
+   `mode_selected`, `rate_pdf_ingested`, `rate_parse_refused`, `rate_extract_skipped`, `rate_extract_quality_refused`, `rate_role_captured`, `rate_score_computed`, `rate_payment_link_created`, `rate_payment_succeeded`, `rate_improved`, `rate_delivered`, `rate_cancelled`, `rate_switched_to_build`.
+
+2. **`src/rate/fulfill.js`** (new) — `fulfillRatePayment({ phoneHash, paymentId, linkId }, deps)` mirrors v1's `payment/fulfill.js` structure and ordering contract:
+   - Idempotency: `markPaymentProcessed(paymentId)` gate. Duplicate webhooks return `{ ok:true, duplicate:true }`.
+   - Point of no return: `session.paid = true` + `session.state = RATE_IMPROVING` persisted BEFORE any delivery work. Payment never rolls back on delivery failure.
+   - `improveResume({ resume_json, sourceText, role })` runs the full LLM improver + verifier + safe-fallback pipeline.
+   - Post-improvement `scoreAll(...)` runs a HONEST re-score (not a projection). Failure here is non-fatal — the audit just omits the "after" number.
+   - Bridges to v1: sets `session.resume_json_rewritten = flattenForRender(improved)`, then calls v1's `deliverPdf(session, phoneHash, { clean: true })`. 100% v1 render + upload pipeline reused (Handlebars → Puppeteer → Sharp → Supabase → signed URL).
+   - Delivery: sends PDF as message #1 with a caption ("Score X → Y", "N bullets improved / M safe-fallback / K unchanged", "audit report bhej raha hu"). Then sends the auto-chunked `renderAuditText(...)` output as follow-up messages.
+   - State advances to `RATE_DELIVERED` only AFTER the primary PDF+caption message lands. Audit-report chunks are best-effort thereafter (already-landed PDF is not re-delivered on retry).
+   - Any error before delivery completes → `unmarkPaymentProcessed(paymentId)` → outer route returns 5xx → webhook retries.
+
+3. **`src/payment/dispatch.js`** (new) — `fulfillPaymentByMode({ phoneHash, paymentId, linkId }, deps)` looks up the session, checks `session.mode === 'rate'` OR `session.state` starts with `RATE_`, and dispatches to `fulfillRatePayment` OR v1's `fulfillPayment`. Session lookup failure defaults to v1 (safer for pre-v2 sessions still in flight).
+
+4. **`src/routes/cashfree.js`** and **`src/routes/razorpay.js`** — swapped `fulfillPayment` import for `fulfillPaymentByMode`. Zero other webhook-route changes; signature verification, phone_hash resolution, and event-type gating stay identical.
+
+5. **`scripts/rate-fulfill.smoke.js`** (new) — seeds a rate session in Redis as if the student just tapped "pay" on the score glimpse, calls `fulfillPaymentByMode()` the same way the webhook route would, captures outbound sends via `deps.send` mock. Verifies: `result.ok`, `result.sent`, final state = `RATE_DELIVERED`, `session.paid = true`, `audit[]` persisted, `resume_json_improved` persisted, `resume_json_rewritten` wired for v1 delivery, exactly 1 PDF-carrying message + ≥1 audit chunk.
+
+**Test evidence (real end-to-end, no mocks except outbound send):**
+
+Meet's real 621-word PDF fed through full pipeline:
+- parse layer 1: 621 words, 1p, no refuse
+- extract: 4089 tokens, gpt-4o-mini
+- score_before: 9.3 / 10
+- fulfillPaymentByMode dispatch → rate fulfillment
+- improveResume ran (would have been 12 bullets, verifier + preservation checks)
+- Post-improvement re-score
+- v1 `deliverPdf` invoked with `{ clean: true }` — real Puppeteer render, real Supabase upload
+- **PDF URL delivered**: `https://hqlnoifxqbymcdwiqfzi.supabase.co/storage/v1/object/sign/resumes/e5ddbe86cc4e/v1784746819801_clean.pdf?token=…` (161KB PDF, signed for 5min)
+- 3 outbound messages captured: 1 PDF + 2 audit chunks
+- Final state: `RATE_DELIVERED`, `session.paid = true`
+- **13/13 assertions pass**. Total elapsed ~30-45s.
+
+Regression: fabrication guard **20/20** green. rate-flow smoke **7/7** green.
+
+**Files touched (`feature/v2-rate-mode`):** `src/telemetry/events.js`, `src/rate/fulfill.js` (new), `src/payment/dispatch.js` (new), `src/routes/cashfree.js`, `src/routes/razorpay.js`, `scripts/rate-fulfill.smoke.js` (new), `src/rate/README.md`, `PROGRESS.md`.
+
+**Rate mode is now paid-shippable.** A real student can: message the bot → pick rate → upload PDF → give target role → see score + top-3 issues + pay CTA → tap Cashfree link → pay ₹49 → receive improved PDF + audit report over WhatsApp. Full loop closes automatically via webhook.
+
+**Day 9 next (proposed):** merge readiness. This includes: (a) a merge-test that runs BUILD-mode smoke + RATE-mode smoke back-to-back on same Redis to confirm no cross-contamination; (b) admin dashboard extensions for rate-mode metrics (how many students entered rate mode, refused, scored, paid, delivered); (c) documentation pass for `docs/RATE_MODE.md` for future Claude sessions. Then merge to main.
+
 ### Session — 2026-07-22 (v2 Day 7.5: Canva template audit + refuse-before-extract hardening, Claude Opus 4.7)
 
 **Context:** Before Day 8 (payment fulfillment), Meet raised: "you know real resumes have wrong format and defects, right?" He dropped 4 Canva template PDFs to stress-test. Findings + fixes below.
