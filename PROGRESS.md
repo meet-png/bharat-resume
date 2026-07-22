@@ -58,6 +58,41 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 
 ## 3. Session log
 
+### Session — 2026-07-21 (v2 Day 3: LLM scorer + pdfjs URL merge + full 10-point rubric, Claude Opus 4.7)
+
+**Context:** Day 2 shipped `2047c91` (deterministic 6-point scorer with byte-equal same-input-same-output). Day 3 goal: complete the total 10-point rubric with the 4-point LLM contribution + fix the pdfjs URL extraction limitation blocking Contact subscore.
+
+**What Day 3 shipped:**
+
+1. **`src/rate/score-llm.js`** — 3 LLM subscores:
+   - **Bullet impact (1.0)**: LLM scores each bullet 0/1/2 (activity / activity+scope / achievement with outcome). Single batched call for all bullets (up to MAX_BULLETS=24) so latency ~2-3s regardless of resume length. Weakest 3 bullets (impact=0, prioritized experience > projects > por > achievements) cited as issues with source_line.
+   - **Role Fit (2.0)**: reuses v1's `src/llm/keywords.js#extractKeywords` for jd_intel (role_noun, keywords, top_prioritized_skills). Skills coverage (studentSkills ∩ jd_keywords) + bullets coverage (bullets containing any keyword). Then deterministic — no per-bullet LLM. Missing keywords cited as `role_fit_missing_keywords` issue.
+   - **Grammar polish (1.0)**: single-shot LLM. Tightened prompt after first test over-flagged resume fragments as needing articles ("Built payment service" IS correct; do not suggest "Built a payment service"). Softened penalty curve from 0.2/issue → 0.1/issue.
+   - Runs the 3 subscores in `Promise.all` — total LLM latency ~3-5s uncached.
+
+2. **`src/rate/score-combined.js`** — `scoreAll(input) → { score, subscores, issues, meta }`. Merges deterministic (6.0) + LLM (4.0) into total 10.0. This is what WhatsApp bot + audit report will call.
+
+3. **`scripts/rate-score.js`** — added `--llm` flag. Bar-chart output for all 7 subscores, cited issues sorted by severity, role-fit meta line showing missing keywords.
+
+4. **`src/rate/parse.js`** — pdfjs `page.getAnnotations()` merge. For each Link annotation, computes centroid, finds the line whose y-range covers it, appends the URL inline in parentheses. So the display "LinkedIn" arrives at the LLM extractor as "LinkedIn (https://linkedin.com/in/xyz)". Preserves the source_line anchor invariant (URL lives on the same line as its display text) instead of introducing a separate URL-list field.
+
+**Test evidence:**
+
+| PDF | Total (Backend SWE target) | Det | LLM | Contact | Content-LLM | Role Fit | Grammar |
+|---|---|---|---|---|---|---|---|
+| Meet's | **8.4 / 10** | 5.9/6 | 2.5/4 | **0.90/1** (was 0.50 pre-URL-fix) | 0.83/1 | 0.73/2 | 0.90/1 |
+| Aditya's | **7.4 / 10** | 4.9/6 | 2.5/4 | 0.50/1 | 0.57/1 | 0.89/2 | 1.00/1 |
+
+Meet's URL-fix impact: extract now populates `linkedin`, `github`, `leetcode`, AND all 3 project github_url slots (dm-to-deal, jodhpur-export-intelligence, bharat-resume) — every one was null before Day 3.
+
+Role Fit correctly low for Meet (0.73/2) at "Backend Software Engineer" — his resume is Python/data-focused, missing Java/Node/Spring/REST/microservices/MongoDB. Score honestly reflects "this resume isn't tuned for this specific role"; testing with role="Data Analyst" would produce higher role fit — feature, not bug.
+
+Grammar polish tightening: pre-Day-3 tightening the LLM flagged "8+ sponsorships" as needing "an" article — false flag on a fragment bullet. Post-tightening, only genuine unambiguous errors flagged (line 38 typo caught, "8+ sponsorships" left alone). Meet's grammar 0.40 → 0.90.
+
+**Files touched (`feature/v2-rate-mode`):** `src/rate/score-llm.js`, `src/rate/score-combined.js`, `src/rate/parse.js`, `src/rate/README.md`, `scripts/rate-score.js`, `PROGRESS.md`.
+
+**Day 4 next:** The **fabrication verifier** (`src/rate/verify.js`) — deterministic content-atom check that rejects any rewritten bullet containing atoms (numbers with units, tech tokens, proper nouns) not present in the original. This is the structural guarantee that the improver LLM can never add a metric the student didn't have. Regression test locked in CI: 100 metric-less bullets → 0 metric-adding rewrites allowed. This is the moat.
+
 ### Session — 2026-07-21 (v2 Day 2: deterministic scorer + determinism guarantee, Claude Opus 4.7)
 
 **Context:** Day 1 shipped in commit `b1cd7ac`. Day 2 goal: the trust foundation of rate mode — a scorer whose output for the same input is byte-equal every time. Kills "AI slot machine" perception on contact.

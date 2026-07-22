@@ -93,6 +93,59 @@ function detectMultiColumn(pages) {
   return bigGapLines / totalLines > 0.25;
 }
 
+// PDF Link annotations give us the underlying hrefs that the text-content
+// stream strips. For each annotation we compute the centroid of its rect,
+// then match it to the line whose y-range covers that centroid — that's the
+// line the hyperlink was drawn on. We then append the URL inline (in
+// parentheses) to that line's text, so the downstream LLM extractor sees
+// "LinkedIn (https://linkedin.com/in/xyz)" instead of just "LinkedIn".
+//
+// Why append in parentheses instead of emitting a separate URL list:
+// (a) preserves the source_line anchor invariant — the URL lives on the same
+// line as the display text it labels;
+// (b) keeps the schema unchanged (still just { n, text });
+// (c) lets sanitizeUrls() in extract.js coerce the URL slot correctly.
+function mergeAnnotationsIntoLines(pageLines, annotations) {
+  if (!annotations || annotations.length === 0) return;
+  const linkAnnots = annotations.filter((a) => a && a.subtype === 'Link' && a.url && typeof a.url === 'string');
+  if (linkAnnots.length === 0) return;
+
+  for (const ann of linkAnnots) {
+    // pdfjs annotation rect is [x1, y1, x2, y2] in PDF user-space units.
+    // Y-axis: bottom-left origin. The line's y (from transform[5]) is the
+    // baseline of the first item, so we test the centroid.
+    const rect = ann.rect;
+    if (!rect || rect.length < 4) continue;
+    const cx = (rect[0] + rect[2]) / 2;
+    const cy = (rect[1] + rect[3]) / 2;
+
+    // Find the line whose items best overlap this centroid. Prefer overlap
+    // by y-tolerance (baseline within 4pt) AND x-overlap (cx within any
+    // item's horizontal span).
+    let bestLine = null;
+    let bestScore = -Infinity;
+    for (const pl of pageLines) {
+      const dy = Math.abs(pl.y - cy);
+      if (dy > 6) continue;
+      // Check any item straddles cx
+      let overlaps = false;
+      for (const it of pl.items) {
+        const x1 = it.transform[4];
+        const x2 = x1 + (it.width || 0);
+        if (cx >= x1 - 2 && cx <= x2 + 2) { overlaps = true; break; }
+      }
+      const score = (overlaps ? 100 : 0) - dy;
+      if (score > bestScore) { bestScore = score; bestLine = pl; }
+    }
+    if (!bestLine) continue;
+
+    // Don't append if this URL is already present in the line text
+    const url = ann.url.trim();
+    if (bestLine.text.includes(url)) continue;
+    bestLine.text = `${bestLine.text} (${url})`;
+  }
+}
+
 async function parsePdfjs(buffer) {
   const pdfjs = await loadPdfjs();
   // pdfjs-dist v6 uses standard fonts bundled inside its package. In Node we
@@ -113,6 +166,13 @@ async function parsePdfjs(buffer) {
     const content = await page.getTextContent();
     const groups = groupItemsByLine(content.items);
     const pageLines = groups.map((g) => ({ y: g.y, items: g.items, text: joinLineItems(g.items) }));
+
+    // Merge in link-annotation hrefs on the same line as the display text —
+    // recovers LinkedIn/GitHub/project URLs that the text-content stream strips.
+    let annotations;
+    try { annotations = await page.getAnnotations(); } catch { annotations = []; }
+    mergeAnnotationsIntoLines(pageLines, annotations);
+
     for (const pl of pageLines) {
       if (!pl.text) continue;
       lineNum++;

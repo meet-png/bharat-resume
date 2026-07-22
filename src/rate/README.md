@@ -2,10 +2,12 @@
 
 Read this in order:
 
-- **parse.js** — buffer → text/lines. 3-layer fallback: pdfjs (primary) → pdf-parse (fallback) → refuse. Refuse fires when word count < 100 (probable image-based PDF). Multi-column detection flags ATS-hostile layouts. NO LLM.
+- **parse.js** — buffer → text/lines. 3-layer fallback: pdfjs (primary) → pdf-parse (fallback) → refuse. Refuse fires when word count < 100 (probable image-based PDF). Multi-column detection flags ATS-hostile layouts. Link annotations from pdfjs (LinkedIn/GitHub/project URLs) are merged inline into the line text so the display "LinkedIn" arrives as "LinkedIn (https://linkedin.com/in/xyz)". NO LLM.
 - **extract.js** — parsed lines → `resume_json` with `source_line` anchors on every bullet. Matches v1 schema for `src/resume/render.js` compat (call `flattenForRender()` to convert `bullets[].text → string[]`). Two invariants: **grounded** (nothing invented) and **anchored** (every bullet cites its line).
 - **lexicon.js** — action-verb dictionary + filler-phrase list + India regex tokens (CGPA, 10th/12th %) + canonical section headers + metric-unit regex. Pure data, no logic. Grow freely.
-- **score.js** — deterministic scorer. Same input → byte-equal output, always. Returns `{ score_deterministic, subscores, issues, meta }` with 6 checks producing 6.0 of the total 10.0 (LLM adds 4.0 in Day 3). Cache-key = `sha256(text + role + RUBRIC_VERSION)`. Bump `RUBRIC_VERSION` to invalidate cached scores.
+- **score.js** — deterministic scorer. Same input → byte-equal output, always. Returns `{ score_deterministic, subscores, issues, meta }` with 6 checks producing 6.0 of the total 10.0. Cache-key = `sha256(text + role + RUBRIC_VERSION)`. Bump `RUBRIC_VERSION` to invalidate cached scores.
+- **score-llm.js** — LLM scorer. 3 subscores adding 4.0 to the total 10.0: bullet impact judgment (1.0, LLM 0/1/2 per bullet), role fit vs jd_intel keywords (2.0, deterministic coverage after one LLM jd_intel call), grammar polish (1.0, hard-error only). Temperature 0; the true determinism guarantee comes from Redis caching on the caller side.
+- **score-combined.js** — merges deterministic + LLM into the total 10.0 score. `scoreAll(input) → { score, subscores, issues, meta }`. This is what WhatsApp bot + audit report generator will call.
 
 ## Day 1 evidence
 
@@ -23,12 +25,24 @@ Read this in order:
 
 Correctly discriminated: Meet's dense metric-rich bullets earned full Content Quality; Aditya's project bullets are cited by source_line 30/32/34 as metric-less. Both scores byte-identical across re-runs (same-input-same-output guarantee met).
 
-## Known Day-2 punch list
+## Day 3 evidence — full 10-point score
 
-- **URL extraction**: pdfjs' text-content stream only gives display text ("LinkedIn", "[GitHub]") not the underlying href. Sanitizer in extract.js currently nulls these so they don't render as visible garbage — but we can do better by pulling `page.getAnnotations()` (link annotations) and merging positions back into the text. Then a bare "LinkedIn" without an underlying URL is a legitimate ATS-compliance flag; a real URL fills the slot.
-- **Achievements vs. certifications overlap**: sometimes the LLM buckets a "won hackathon" line under achievements when the source uses "CERTIFICATIONS" — soft, semantic.
-- **CGPA format**: extractor captures whatever's written; scoring should later flag missing `/10` denominator as an India-specific check.
-- **Multi-column detection heuristic**: tuned at 25% of lines showing internal gaps > 15% page width. Not yet tested against a Canva 2-column template — Day 3 task.
+| PDF | Total (target: Backend SWE) | Det | LLM | Content-LLM | Role Fit | Grammar | Contact (post-URL-fix) |
+|---|---|---|---|---|---|---|---|
+| Meet's (dense tech) | **8.4 / 10** | 5.9/6 | 2.5/4 | 0.83/1 | 0.73/2 | 0.90/1 | **0.90/1** (was 0.50) |
+| Aditya's (fresher basic) | **7.4 / 10** | 4.9/6 | 2.5/4 | 0.57/1 | 0.89/2 | 1.00/1 | 0.50/1 (Aditya's PDF has no hyperlink annotations) |
+
+The Day 3 URL-annotation merge lifted Meet's Contact from 0.5 → 0.9 (LinkedIn + GitHub URLs now extracted from the PDF's link annotations, not just display text). It also populated all 3 project github_url fields for Meet's projects — previously all null.
+
+Role Fit correctly LOW for Meet at "Backend SWE" (his resume is Python/data-focused, missing Java/Node/Spring). This is a feature: the score honestly tells the student "your resume isn't tuned for this specific role."
+
+## Known punch list
+
+- **~~URL extraction~~** — SHIPPED in Day 3. Link annotations merged inline.
+- **~~CGPA `/10` denominator~~** — SHIPPED in Day 2. Scored as india_cgpa_missing_denominator.
+- **Achievements vs. certifications overlap** — soft semantic issue; sometimes the LLM buckets a "won hackathon" line under achievements when the source uses "CERTIFICATIONS". Fix if it hurts a real student.
+- **Multi-column detection heuristic**: tuned at 25% of lines showing internal gaps > 15% page width. Not yet tested against a Canva 2-column template — need a fixture.
+- **Role Fit non-determinism**: jd_intel comes from a single LLM call that varies slightly run-to-run. Cache jd_intel by `sha256(role)` in Redis (30d TTL) on the caller side to lock this down.
 
 ## Bench
 
@@ -37,7 +51,10 @@ Correctly discriminated: Meet's dense metric-rich bullets earned full Content Qu
 node scripts/rate-parse.js <path.pdf|path.docx>
 node scripts/rate-parse.js <path.pdf> --no-llm                     # parse only, no OpenAI cost
 
-# Day 2
+# Day 2 — deterministic 6-point score
 node scripts/rate-score.js <path.pdf> --role "Backend Engineer"
 node scripts/rate-score.js <path.pdf> --role "Data Analyst" --verify-cache   # scores twice, byte-compares
+
+# Day 3 — full 10-point (deterministic 6 + LLM 4). ~10s + ~$0.002.
+node scripts/rate-score.js <path.pdf> --role "Backend Engineer" --llm
 ```
