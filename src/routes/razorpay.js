@@ -35,9 +35,10 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
   const phoneHash = linkEntity.notes && linkEntity.notes.phone_hash;
   const paymentId = paymentEntity.id || linkEntity.id;
   const linkId = linkEntity.id;
+  const notes = linkEntity.notes || null; // includes v2 rate-mode flow marker
 
   try {
-    const result = await fulfillPaymentByMode({ phoneHash, paymentId, linkId });
+    const result = await fulfillPaymentByMode({ phoneHash, paymentId, linkId, notes });
     return res.status(200).json(result);
   } catch (e) {
     req.log.error({ err: e.message }, 'fulfillment failed');

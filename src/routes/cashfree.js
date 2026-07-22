@@ -46,6 +46,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
   let phoneHash = null;
   let linkId = null;
   let paymentId = null;
+  let notes = null; // link_notes / order_tags — includes flow marker for v2 rate mode
 
   if (type === 'PAYMENT_LINK_EVENT') {
     // Link-level event. Only 'PAID' triggers fulfilment; other statuses
@@ -56,6 +57,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
     }
     linkId = data.link_id;
     phoneHash = (data.link_notes && data.link_notes.phone_hash) || null;
+    notes = data.link_notes || null;
     paymentId = (data.order && (data.order.transaction_id || data.order.order_id)) || linkId;
   } else if (type === 'PAYMENT_SUCCESS_WEBHOOK') {
     // Order-level event. Cashfree fires this for every completed payment
@@ -70,6 +72,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
     // If that changes we still have Redis as a fallback keyed on link_id.
     linkId = data.order && data.order.order_id;
     phoneHash = (data.order && data.order.order_tags && data.order.order_tags.phone_hash) || null;
+    notes = (data.order && data.order.order_tags) || null;
     paymentId = (data.payment && (data.payment.cf_payment_id || data.payment.payment_id)) || linkId;
   } else {
     // Any other event Cashfree may forward (settlement, dispute, refund, etc.)
@@ -105,7 +108,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
     // payment — that's a theoretical duplicate-fulfilment risk if BOTH event
     // types were subscribed. Meet's account only exposes success payment, so
     // this doesn't happen in practice.
-    const result = await fulfillPaymentByMode({ phoneHash, paymentId: String(paymentId), linkId });
+    const result = await fulfillPaymentByMode({ phoneHash, paymentId: String(paymentId), linkId, notes });
     return res.status(200).json(result);
   } catch (e) {
     req.log.error({ err: e.message }, 'fulfillment failed');

@@ -52,8 +52,12 @@ function normalisePhone(raw) {
 // the Razorpay flow — the webhook uses it to map back to a session without
 // putting PII in Cashfree's dashboard). Real phone/name/email go in
 // customer_details because Cashfree requires them for the link.
+// Caller can pass additional `notes` (string values only — Cashfree link_notes
+// only accepts strings) — used by v2 rate mode to mark `flow: 'rate'` so the
+// webhook dispatcher has a belt-and-braces signal even if session state is
+// somehow stale.
 // Returns { id, short_url } — same shape router.js expects from either provider.
-async function createPaymentLink({ phoneHash, phone, name, email }) {
+async function createPaymentLink({ phoneHash, phone, name, email, notes: extraNotes } = {}) {
   if (!phoneHash) throw new Error('createPaymentLink: phoneHash required');
   requireKeys();
 
@@ -62,6 +66,18 @@ async function createPaymentLink({ phoneHash, phone, name, email }) {
 
   // Unique per merchant, stable-enough for retries: hash-fragment + timestamp.
   const linkId = `br_${String(phoneHash).slice(0, 12)}_${Date.now()}`;
+
+  // Merge caller notes on top of phone_hash. phone_hash is protected — it
+  // can never be overwritten by a caller. All values are stringified because
+  // Cashfree's link_notes only accepts strings.
+  const linkNotes = { phone_hash: String(phoneHash) };
+  if (extraNotes && typeof extraNotes === 'object') {
+    for (const [k, v] of Object.entries(extraNotes)) {
+      if (k === 'phone_hash') continue;
+      if (v == null) continue;
+      linkNotes[k] = String(v);
+    }
+  }
 
   const body = {
     link_id: linkId,
@@ -78,7 +94,7 @@ async function createPaymentLink({ phoneHash, phone, name, email }) {
       notify_url: `${config.BASE_URL}/webhook/cashfree`,
       return_url: `${config.BASE_URL}/payment-success`,
     },
-    link_notes: { phone_hash: String(phoneHash) },
+    link_notes: linkNotes,
     link_auto_reminders: false,
   };
 
