@@ -58,6 +58,476 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 
 ## 3. Session log
 
+### Session — 2026-07-23 (v2 Day 9: merge readiness — cross-mode smoke, admin dashboard, RATE_MODE.md reference doc, Claude Opus 4.7)
+
+**Context:** Days 1-8 built rate mode as a complete, paid-shippable pipeline. Day 9 goal: make it safe to merge to main. Three deliverables — a cross-mode contamination test (highest safety value), admin dashboard extensions for rate funnel metrics (operational visibility for the pilot broadcast), and `docs/RATE_MODE.md` (future-Claude reference so a cold session can pick up rate-mode context without re-reading 15 files).
+
+**What Day 9 shipped:**
+
+1. **`scripts/rate-and-build.smoke.js`** (new) — cross-mode contamination smoke. Uses one phone hash, walks the state machine through:
+   - Block A: cold hi → mode select → rate → PDF upload → cancel (11 assertions)
+   - Block B: same phone picks build → verify no rate.* leak into build state (4 assertions)
+   - Block C: mid-build "rate my resume" text → mode-aware refusal fires but state unchanged (3 assertions)
+   - Block D: reset → back to mode select (2 assertions)
+   - Block E: pick rate AGAIN → verify no stale session.rate.* data or paid flag (5 assertions)
+   - Block F: "rate my resume" text in RATE_AWAITING_PDF → gets the "send PDF" nudge, NOT the build-mode "we don't rate resumes" refusal (4 assertions)
+   - **29/29 assertions pass.** Zero contamination between modes on the same phone.
+
+2. **`src/store/postgres.js#fetchMetrics`** extended:
+   - Reads `mode_selected.payload.mode` to split entrants build vs rate.
+   - Aggregates rate-mode funnel: entered / pdf_ingested / scored / payment_link_created / payment_succeeded / delivered.
+   - Sums refused counts (parse_refused + extract_skipped + extract_quality_refused).
+   - Reads `rate_score_computed.payload.score` for average rate-mode score.
+   - Revenue now `(build_paid + rate_paid) * ₹49` with a breakdown line.
+   - Returns new fields: `modeSplit`, `rateFunnel`, `revenueBreakdown`.
+
+3. **`src/routes/admin.js#renderMetrics`** extended:
+   - New "Mode split" table above Funnel.
+   - Existing Funnel renamed to "Build funnel (% of sessions started)".
+   - New "Rate funnel (% of rate-mode entrants)" table with all 6 stages + refused + cancelled + conversion% + avg score.
+   - Revenue card now shows breakdown ("build ₹X · rate ₹Y") below the total.
+
+4. **`docs/RATE_MODE.md`** (new, ~250 lines) — architecture reference doc. Sections:
+   - What rate mode is (product-level) + the single invariant
+   - End-to-end flow diagram (states + transitions)
+   - File-by-file responsibility map (19 files, one-line each with "load when" trigger)
+   - State field cheat sheet (session.rate.*)
+   - The 3 non-negotiable guarantees (no fabrication, no over-compression, honest re-score)
+   - Bench commands (9 CLI recipes)
+   - Common failure modes + where to look (11 symptoms → root cause → file)
+   - When to add a new state / prompt / event / refuse reason / improve heuristic
+   - Non-goals (5 explicit things v2 doesn't do)
+   - Regression contract (3 mandatory suites)
+
+**Test evidence:**
+
+Full regression pass:
+- `test:rate-verify` (fabrication guard): **20/20 green** ✓
+- `rate-flow.smoke.js` (state machine): **7/7 green** ✓
+- `rate-and-build.smoke.js` (cross-mode contamination): **29/29 green** ✓
+- `rate-fulfill.smoke.js` (payment fulfillment E2E, from Day 8): **13/13 green** ✓
+
+Nothing in build mode changed. Nothing in the fabrication or preservation guards changed. Zero regressions.
+
+**Files touched (`feature/v2-rate-mode`):** `scripts/rate-and-build.smoke.js` (new), `src/store/postgres.js`, `src/routes/admin.js`, `docs/RATE_MODE.md` (new), `PROGRESS.md`.
+
+**Rate mode is now merge-ready.** Recommended next actions (Day 10):
+1. Manual smoke on live Meta WhatsApp — one full rate-mode conversation with a real phone.
+2. Merge `feature/v2-rate-mode` → `main` via PR (small dev-team pattern: even solo, a PR gives a rendered diff for a final read).
+3. Watch Railway deploy + admin dashboard for first few rate-mode entrants.
+
+### Session — 2026-07-23 (v2 Day 8: rate-mode payment webhook fulfillment — pipeline is now end-to-end paid, Claude Opus 4.7)
+
+**Context:** Days 1-7.5 built parse → extract → score → improve → verify → audit → glimpse → pay-link. Day 8 goal: close the loop by wiring the paid webhook to actually improve, re-score, render the clean PDF, upload, and deliver both the PDF and the audit report over WhatsApp. Meet's rate-mode pilot flow is now paid-shippable.
+
+**What Day 8 shipped:**
+
+1. **`src/telemetry/events.js`** — extended `EVENT_NAMES` allowlist with rate-mode events. Kills the "unknown event — skipped" warnings from Day 7:
+   `mode_selected`, `rate_pdf_ingested`, `rate_parse_refused`, `rate_extract_skipped`, `rate_extract_quality_refused`, `rate_role_captured`, `rate_score_computed`, `rate_payment_link_created`, `rate_payment_succeeded`, `rate_improved`, `rate_delivered`, `rate_cancelled`, `rate_switched_to_build`.
+
+2. **`src/rate/fulfill.js`** (new) — `fulfillRatePayment({ phoneHash, paymentId, linkId }, deps)` mirrors v1's `payment/fulfill.js` structure and ordering contract:
+   - Idempotency: `markPaymentProcessed(paymentId)` gate. Duplicate webhooks return `{ ok:true, duplicate:true }`.
+   - Point of no return: `session.paid = true` + `session.state = RATE_IMPROVING` persisted BEFORE any delivery work. Payment never rolls back on delivery failure.
+   - `improveResume({ resume_json, sourceText, role })` runs the full LLM improver + verifier + safe-fallback pipeline.
+   - Post-improvement `scoreAll(...)` runs a HONEST re-score (not a projection). Failure here is non-fatal — the audit just omits the "after" number.
+   - Bridges to v1: sets `session.resume_json_rewritten = flattenForRender(improved)`, then calls v1's `deliverPdf(session, phoneHash, { clean: true })`. 100% v1 render + upload pipeline reused (Handlebars → Puppeteer → Sharp → Supabase → signed URL).
+   - Delivery: sends PDF as message #1 with a caption ("Score X → Y", "N bullets improved / M safe-fallback / K unchanged", "audit report bhej raha hu"). Then sends the auto-chunked `renderAuditText(...)` output as follow-up messages.
+   - State advances to `RATE_DELIVERED` only AFTER the primary PDF+caption message lands. Audit-report chunks are best-effort thereafter (already-landed PDF is not re-delivered on retry).
+   - Any error before delivery completes → `unmarkPaymentProcessed(paymentId)` → outer route returns 5xx → webhook retries.
+
+3. **`src/payment/dispatch.js`** (new) — `fulfillPaymentByMode({ phoneHash, paymentId, linkId }, deps)` looks up the session, checks `session.mode === 'rate'` OR `session.state` starts with `RATE_`, and dispatches to `fulfillRatePayment` OR v1's `fulfillPayment`. Session lookup failure defaults to v1 (safer for pre-v2 sessions still in flight).
+
+4. **`src/routes/cashfree.js`** and **`src/routes/razorpay.js`** — swapped `fulfillPayment` import for `fulfillPaymentByMode`. Zero other webhook-route changes; signature verification, phone_hash resolution, and event-type gating stay identical.
+
+5. **`scripts/rate-fulfill.smoke.js`** (new) — seeds a rate session in Redis as if the student just tapped "pay" on the score glimpse, calls `fulfillPaymentByMode()` the same way the webhook route would, captures outbound sends via `deps.send` mock. Verifies: `result.ok`, `result.sent`, final state = `RATE_DELIVERED`, `session.paid = true`, `audit[]` persisted, `resume_json_improved` persisted, `resume_json_rewritten` wired for v1 delivery, exactly 1 PDF-carrying message + ≥1 audit chunk.
+
+**Test evidence (real end-to-end, no mocks except outbound send):**
+
+Meet's real 621-word PDF fed through full pipeline:
+- parse layer 1: 621 words, 1p, no refuse
+- extract: 4089 tokens, gpt-4o-mini
+- score_before: 9.3 / 10
+- fulfillPaymentByMode dispatch → rate fulfillment
+- improveResume ran (would have been 12 bullets, verifier + preservation checks)
+- Post-improvement re-score
+- v1 `deliverPdf` invoked with `{ clean: true }` — real Puppeteer render, real Supabase upload
+- **PDF URL delivered**: `https://hqlnoifxqbymcdwiqfzi.supabase.co/storage/v1/object/sign/resumes/e5ddbe86cc4e/v1784746819801_clean.pdf?token=…` (161KB PDF, signed for 5min)
+- 3 outbound messages captured: 1 PDF + 2 audit chunks
+- Final state: `RATE_DELIVERED`, `session.paid = true`
+- **13/13 assertions pass**. Total elapsed ~30-45s.
+
+Regression: fabrication guard **20/20** green. rate-flow smoke **7/7** green.
+
+**Files touched (`feature/v2-rate-mode`):** `src/telemetry/events.js`, `src/rate/fulfill.js` (new), `src/payment/dispatch.js` (new), `src/routes/cashfree.js`, `src/routes/razorpay.js`, `scripts/rate-fulfill.smoke.js` (new), `src/rate/README.md`, `PROGRESS.md`.
+
+**Rate mode is now paid-shippable.** A real student can: message the bot → pick rate → upload PDF → give target role → see score + top-3 issues + pay CTA → tap Cashfree link → pay ₹49 → receive improved PDF + audit report over WhatsApp. Full loop closes automatically via webhook.
+
+**Day 9 next (proposed):** merge readiness. This includes: (a) a merge-test that runs BUILD-mode smoke + RATE-mode smoke back-to-back on same Redis to confirm no cross-contamination; (b) admin dashboard extensions for rate-mode metrics (how many students entered rate mode, refused, scored, paid, delivered); (c) documentation pass for `docs/RATE_MODE.md` for future Claude sessions. Then merge to main.
+
+### Session — 2026-07-22 (v2 Day 7.5: Canva template audit + refuse-before-extract hardening, Claude Opus 4.7)
+
+**Context:** Before Day 8 (payment fulfillment), Meet raised: "you know real resumes have wrong format and defects, right?" He dropped 4 Canva template PDFs to stress-test. Findings + fixes below.
+
+**The 4 test files (Canva template previews with placeholder content):**
+- **design(1) Sebastian Bennett** — mostly-clean design, would parse OK if filled
+- **design(2) Sharya Singh** — loose 2-column, education/experience reading order scrambled
+- **design(3) Richard Sanchez** — full multi-column, letter-spaced headers ("P R O F I L E", "S K I L L S"), sidebar-and-main text INTERLEAVED (line 20 had "S K I L L S" fused with a work bullet)
+- **design.pdf** — same content as design(3)
+
+**The critical failure surfaced:** existing `multiColumn` detector returned FALSE on Richard Sanchez despite the visible chaos. Cause: sidebar and main-column items land on different y-coordinates in pdfjs' text stream, so my line-reconstruction (2pt y-tolerance) treats them as separate lines. Each reconstructed line looks single-column even though the layout isn't. **Silent-bad extraction path:** parse succeeds, LLM produces a plausible-but-wrong `resume_json` from scrambled text, score fires, student pays ₹49 and gets improved-but-nonsense output.
+
+**What Day 7.5 shipped (`src/rate/parse.js` + `src/rate/extract.js` + `src/state/rate-prompts.js` + `src/state/rate-router.js`):**
+
+1. **`detectLetterSpacedHeaders(lines)`** — pattern `^[A-Z](\s[A-Z]){3,}...`  matches Canva's default header letter-spacing. ≥2 hits = confident Canva signature.
+
+2. **`detectCanvaPlaceholders(text)`** — token list catches unfilled templates: `reallygreatsite.com`, `+123-456-7890`, `123 Anywhere St`, `Lorem ipsum`, `Borcelle`, `Wardiere`, `Salford`, `Fauget Studio`, `Studio Shodwe`. ≥2 tokens = unfilled template preview.
+
+3. **Rewrote multi-column detector (`detectMultiColumnByHistogram`)** as a conservative x-cluster check: two peaks in the x-histogram separated by ≥30% of page width, BOTH carrying ≥20% of total items. This intentionally under-fires on ambiguous cases (real 2-col resumes that pdfjs streams coherently) rather than false-positive on healthy single-col (Meet's contact-line separators). Missed cases are recovered by the post-extract sparsity check below.
+
+4. **`checkExtractionQuality({ resume_json, parsedText, ... })`** in extract.js — post-extract sanity net for the escape case (student fills placeholders + strips letter-spacing but keeps Canva layout). If ≥200 words parsed but LLM extracted zero experience/projects/PoR/achievements, or bullet chars < 5% of source text when ≥400 words parsed → return `{ reason, suggestion }`. rate-router converts this to a graceful refuse.
+
+5. **`refusePdf(reason)` in rate-prompts.js** — expanded from 3 to 9 branches with Hinglish-first specific messages per reason:
+   - `canva-placeholder-template` — "abhi tak fill nahi hua"
+   - `canva-multi-column-template` — "2-column decorative template, ATS aur reader dono nahi padh sakte"
+   - `canva-letter-spaced-headers` — "P R O F I L E format signal, simple headers use karo"
+   - `multi-column-layout` — generic 2-column refusal
+   - `text-too-thin-probably-image-pdf` — image-based / scanned
+   - `no-text-extractable` — encrypted / all-image
+   - `docx-too-thin`, `docx-error`, default fallback
+
+**Test evidence:**
+
+| PDF | multiColumn | letterSpaced | canvaPlaceholder | Refuse verdict |
+|---|---|---|---|---|
+| design(1) Sebastian | false | false | **true** | ✅ canva-placeholder-template |
+| design(2) Sharya | false | false | **true** | ✅ canva-placeholder-template |
+| design(3) Richard | false | **true** | **true** | ✅ canva-placeholder-template |
+| design.pdf | false | **true** | **true** | ✅ canva-placeholder-template |
+| meet_kabra_resume_.pdf | false | false | false | ✅ passes to extract |
+| resume (6).pdf (Aditya) | false | false | false | ✅ passes to extract |
+
+**4/4 Canva templates refused with specific Hinglish reason. 0/2 healthy resumes false-positive.**
+
+Regression checks: `test:rate-verify` fabrication guard 20/20 green. `rate-flow.smoke.js` 7/7 assertions pass end-to-end.
+
+**Known escape case (documented, not currently caught by parse):** a student who fills in placeholder text with real content AND removes letter-spacing (rare — Canva doesn't easily let you customize this) AND keeps a chaotic multi-column layout. The post-extract sparsity check catches most of these; the rest would get a mediocre score honestly reflecting the extraction, no fabrication.
+
+**Files touched (`feature/v2-rate-mode`):** `src/rate/parse.js`, `src/rate/extract.js`, `src/state/rate-prompts.js`, `src/state/rate-router.js`, `PROGRESS.md`.
+
+**Day 8 next (unchanged):** payment webhook fulfillment for rate mode. Improved PDF + audit report delivery over WhatsApp.
+
+### Session — 2026-07-21 (v2 Day 7: rate mode wired into state machine, Claude Opus 4.7)
+
+**Context:** Days 1-6 built rate-mode's pipeline (parse → extract → score → improve → verify → audit) as a set of pure functions callable from the CLI. Day 7 goal: wire it into the WhatsApp state machine so a real message → PDF upload → score → pay flow works. This is the merge-day work — the one place v2 has to touch v1 code — kept surgical.
+
+**What Day 7 shipped:**
+
+1. **`src/state/states.js`** — added new mode-select + 7 rate states:
+   - `AWAITING_MODE_SELECT` — very first state for a new session (replaces immediate `AWAITING_CONFIRM_START`)
+   - `RATE_AWAITING_PDF`, `RATE_AWAITING_ROLE`, `RATE_SCORING`, `RATE_SHOWING_SCORE`, `RATE_AWAITING_PAYMENT`, `RATE_IMPROVING`, `RATE_DELIVERED`
+   - Exported `RATE_STATES` set for the main router / whatsapp.js to test membership.
+   - Build states are unchanged and untouched.
+
+2. **`src/state/rate-prompts.js`** (new) — all rate-mode message templates in one file, isolated from `prompts.js`. Includes `renderScoreGlimpse({ score, subscores, issues, role })` — the free-glimpse rendering with top-3 issues + payment CTA.
+
+3. **`src/state/rate-router.js`** (new) — parallel state machine for rate mode. `handleRateInner({ session, phoneHash, body, phoneFrom, attachment, sendWhatsApp })` returns a reply (string or `{text, media}`) same shape as build mode. Handles:
+   - PDF attachment on `RATE_AWAITING_PDF` → parse → refuse if layer-3 → extract → advance to `RATE_AWAITING_ROLE`
+   - Text on `RATE_AWAITING_ROLE` → capture role → run `scoreAll()` → send glimpse → `RATE_SHOWING_SCORE`
+   - `pay` on `RATE_SHOWING_SCORE` → create Cashfree payment link (tagged with `flow: 'rate'` for the webhook fulfiller in Day 8) → `RATE_AWAITING_PAYMENT`
+   - `cancel` from any rate state → back to `AWAITING_MODE_SELECT`, clears `session.rate` and any payment link
+   - Interstitial acks ("parsing…", "scoring in progress…") sent as best-effort via `sendWhatsApp` on long steps.
+
+4. **`src/state/router.js`** — surgical additions:
+   - `newSession()` now sets `mode: null, rate: null`.
+   - `handleInner` new-session path lands in `AWAITING_MODE_SELECT`.
+   - Mode selection block at handleInner top: `MODE_BUILD_RE` (1 / build / naya / banao / new / create) → build mode; `MODE_RATE_RE` (2 / rate / review / score / mera resume dekh) → rate mode; unprompted PDF upload auto-switches to rate.
+   - Rate dispatch: `if (session.mode === 'rate' || RATE_STATES.has(session.state)) return handleRateInner(...)` returns BEFORE build-mode guardrails run.
+   - **Mode-aware `REVIEW_EXISTING_RE`** — the "we don't rate resumes" refusal from 2026-07-17 now fires ONLY in `mode === 'build'`; in rate mode it would refuse the exact intent the mode is designed for. Refusal text also nudges to type "rate" for the new feature.
+   - `handle()` signature extended: accepts `attachment` in addition to `body`.
+
+5. **`src/routes/whatsapp.js`** — mode-aware attachment handling:
+   - Non-text message no longer refused unconditionally. Instead: check `session.state` — `RATE_AWAITING_PDF` or `AWAITING_MODE_SELECT` (auto-switch) accept documents; everything else refuses.
+   - Only `application/pdf`, `.docx`, `.doc` mimes accepted (photo/audio/video always refused).
+   - Downloads via new `downloadMedia()` in `src/messaging/meta.js` — 10MB cap, bearer-auth'd 2-step Meta CDN fetch.
+   - Passes `{ buffer, filename, mimeType, bytes }` as `attachment` param into `handle()`.
+
+6. **`src/messaging/meta.js`** — added `downloadMedia(mediaId, { maxBytes })` — 2-step Meta CDN download (`GET /{media-id}` → `GET url`) with bearer auth on both. Enforces file-size cap defensively (OOM guard on hostile PDFs).
+
+7. **`scripts/rate-flow.smoke.js`** — end-to-end state machine smoke. Simulates a real WhatsApp conversation without hitting WhatsApp: cold entry → mode select → PDF upload (real Meet's resume) → role → score glimpse → pay → cancel → build switch. 7 assertions, all pass.
+
+**Test evidence:**
+- Rate-flow smoke: **7/7 assertions pass** end-to-end. Meet's real 621-word PDF parses, extracts, scores 9.3/10 for "Data Analyst", produces a real Cashfree TEST payment link on `pay`, cancels cleanly, switches to build mode cleanly.
+- Fabrication regression suite: **20/20 still green** — no cross-contamination from state-machine changes.
+- Zero v1 build-mode code changed except the surgical `newSession()` mode field and the top of `handleInner`. Build flow is untouched.
+
+**Known non-blockers surfaced:**
+- Interstitial acks (`sendWhatsApp` calls in rate-router for "parsing…" / "scoring…") fail in test env (Twilio smoke rejects test-phone routing). Wrapped in try/catch so non-fatal; production has a real WA provider.
+- Telemetry emits `logEvent: missing phoneHash or unknown event — skipped` warnings for new rate-mode event names (`mode_selected`, `rate_pdf_ingested`, `rate_role_captured`, `rate_score_computed`, `rate_payment_link_created`, `rate_cancelled`). Cosmetic — add to allowlist in Day 8.
+
+**Files touched (`feature/v2-rate-mode`):** `src/state/states.js`, `src/state/rate-prompts.js` (new), `src/state/rate-router.js` (new), `src/state/router.js`, `src/routes/whatsapp.js`, `src/messaging/meta.js`, `scripts/rate-flow.smoke.js` (new), `src/rate/README.md`, `PROGRESS.md`.
+
+**Day 8 next:** payment webhook fulfillment for rate mode. When Cashfree webhook fires with `flow: 'rate'`, invoke `improveResume()` → render via v1's Handlebars template → watermark clean → upload → deliver PDF + audit report over WhatsApp. Also: add new event names to telemetry allowlist.
+
+### Session — 2026-07-21 (v2 Day 6: content-preservation check + audit report generator, Claude Opus 4.7)
+
+**Context:** Day 5 (`84db50b`) flagged an over-compression regression on Meet's line 48 — the improver LLM dropped "free-edit loop" and "role-tailored rewriter mines GitHub READMEs" while shortening for style. Day 6 goal: close that gap AND ship the student-facing audit report.
+
+**What Day 6 shipped:**
+
+1. **`checkContentPreservation({ original, rewritten })`** added to `src/rate/verify.js`. Two guards:
+   - **Atom preservation ≥ 85%**: extract atoms (numbers, tech tokens, proper nouns) from BOTH; count atoms in original that don't appear in rewrite; reject if drop rate > 15%.
+   - **Word ratio ≥ 65%**: rewrite word-count must be at least 65% of original. Catches Meet's line 48 at 18/34 = 53% word ratio.
+   - Returns `{ ok, dropped_atoms, word_ratio, atom_kept_ratio, details }`. Different failure mode than fabrication but same retry-then-fallback path in improver.
+
+2. **`src/rate/improver.js`** updated:
+   - Verify pipeline now runs `verify()` + `checkContentPreservation()`. Either failure triggers retry.
+   - Retry guidance is targeted: fabrication failures cite the flagged atoms with "do not add"; over-compression failures cite the dropped specifics with "keep them" and name the offending bullets by index with their word ratio.
+   - `IMPROVER_SYSTEM` prompt hardened with explicit rules (5, 6): "preserve all specifics from original", "aim for ≥ 70% of original length".
+   - Fallback tracks `fail_reason` in the audit trail (fabrication vs over-compression vs skipped) so the audit report can explain what happened.
+
+3. **`src/rate/audit.js`** — student-facing report generator:
+   - `renderAuditText({ audit, role, scoreBefore, scoreAfter, meta })` → `{ text, chunks, char_count, tally }`.
+   - Header: "BHARAT RESUME — Resume Audit", target role, score before → after, mode tally ("9 bullets improved by AI + auto-verified; 3 bullets improved after 1 retry"), moat statement.
+   - Per-bullet BEFORE / AFTER quotes, source_line anchors, entry labels (e.g. "The Velvet Bean", "DM-to-Deal — Autonomous AI Sales Agent"), change reasons.
+   - Auto-chunks on section boundaries when total > 3900 chars (below WhatsApp's 4096 limit with headroom).
+   - `renderAuditJson({...})` returns the same content structured for a future PDF renderer.
+
+4. **`scripts/rate-improve.js`** — added `--audit` and `--score-both` flags. Full pipeline now: parse → extract → improve → re-score before/after → render audit report. Displays chunks as they'd appear to the student on WhatsApp.
+
+**Test evidence:**
+
+Regression check — Meet's line 48 (the Day 5 over-compression):
+- Day 5:  BEFORE 34 words → AFTER 18 words (dropped "free-edit loop", "role-tailored rewriter mines GitHub READMEs without fabricating data").
+- Day 6:  first pass rejected on preservation → RETRY with guidance → AFTER preserves all specifics. Retry icon `↻` in the diff. Verifier + preservation both pass.
+
+Full pipeline runs:
+| PDF | Role | Score before → after | Bullets | LLM 1st pass | Retry | Fallback | Unverified | Report size |
+|---|---|---|---|---|---|---|---|---|
+| Aditya's | Backend SWE | **8.0 → 8.2** (Δ +0.2) | 7 | 7 | 0 | 0 | **0** | 3045 chars, 1 chunk |
+| Meet's | Data Analyst | **9.3 → 9.3** (Δ +0.0) | 12 | 9 | 3 | 0 | **0** | 6351 chars, 2 chunks |
+
+**Meet's Δ +0.0 is a feature, not a bug.** His original resume was already at ceiling on all measurable subscores; improvements are stylistic restructures that don't move the score, and the report honestly reflects that. Aditya's Δ +0.2 is a real gain from LLM legitimately adding MongoDB (from his skills) and Java+Python context (from his skills) to weak bullets — every added detail cites a source line.
+
+Meet's 3 retries all fired on Bharat Resume project bullets (lines 44, 46, 48) — dense content that the first pass wanted to shorten for style. Preservation check caught all three; retry produced full-length rewrites; every atom verified. This is the moat working end-to-end.
+
+**Files touched (`feature/v2-rate-mode`):** `src/rate/verify.js`, `src/rate/improver.js`, `src/rate/audit.js` (new), `src/rate/README.md`, `scripts/rate-improve.js`, `PROGRESS.md`.
+
+**Day 7 next:** wire rate mode into the state machine — new `RATE_MODE_START` / `RATE_AWAITING_PDF` / `RATE_AWAITING_ROLE` / `RATE_SCORING` / `RATE_SHOWING_SCORE` / `RATE_IMPROVING` / `RATE_PREVIEW_SENT` / `RATE_PAID` states in `src/state/router.js`. This is the merge-day work touching v1 (mode-aware refactor of yesterday's guardrails: `REVIEW_EXISTING_RE` fires only in build mode; non-text refusal in `whatsapp.js` allows PDF only when `state === RATE_AWAITING_PDF`).
+
+### Session — 2026-07-21 (v2 Day 5: LLM improver with verifier gate + safe fallback, Claude Opus 4.7)
+
+**Context:** Day 4 shipped the fabrication verifier (`2d8f523`). Day 5 goal: the improver that USES the verifier — an LLM rewriter for every bullet, gated by verify.js on the way out. Nothing that fails verification reaches the student.
+
+**What Day 5 shipped:**
+
+1. **`src/rate/improver.js`** — `improveSection({ bullets, section, role, sourceText })` — one LLM call per section (batched, up to 8 bullets per call). Prompt hard-codes: "every atom in your output must appear in the ORIGINAL bullet or FULL RESUME context." Model: `gpt-4o` (config.LLM_EDIT) — stronger reasoning for verifier-friendly rewrites. After the batch returns, each bullet is individually verified.
+   - On verifier failure: retry ONCE with an extra guidance line citing the flagged atoms.
+   - On second failure: fall back to `safeFallback()` — deterministic verb replacement (Worked on → Built, Responsible for → Owned, Helped with → Contributed to, Assisted with → Supported, etc.). Since safeFallback strictly reduces atoms, it can never be a fabrication.
+   - Mode per bullet: `llm | llm-retry | safe-fallback | unchanged | skipped`.
+
+2. **`src/rate/improve-resume.js`** — `improveResume({ resume_json, sourceText, role })` runs experience + projects + por + achievements sections in `Promise.all`. Returns `{ resume_json_improved, audit, meta }`. Audit is what the audit-report generator consumes: `[{ section, entry_label, source_line, original, improved, mode, verified, unverified, changes }]` per bullet.
+
+3. **`scripts/rate-improve.js`** — dev CLI showing per-bullet BEFORE/AFTER diff with mode icons (✓ llm, ↻ retry, ⚠ fallback, · unchanged) and unverified atoms if any leak.
+
+**Test evidence on real PDFs:**
+
+| PDF | Role | Bullets | LLM verified | Fallback | Unchanged | Unverified | Time |
+|---|---|---|---|---|---|---|---|
+| Aditya's | Backend SWE | 7 | 7 | 0 | 0 | **0** | 2.2s |
+| Meet's | Data Analyst | 12 | 12 | 0 | 0 | **0** | 7.6s |
+
+**Zero unverified atoms across both runs.** The moat is intact end-to-end.
+
+Aditya's line 23 gained "MongoDB" (from his skills section). Aditya's line 36 gained "Java and Python" (from his skills). Meet's line 28 gained "Claude API" (from DM-to-Deal tech_stack). Meet's line 44 gained "Node.js and OpenAI gpt-4o-mini" (from Bharat Resume tech_stack). Every added detail cites a source line — every atom is grounded.
+
+**Content-preservation caveat surfaced (Day 5+ punch):** Meet's line 48 improvement is a stylistic regression:
+  BEFORE: "Built deterministic ATS scorer (bullet density × action verbs × JD-keyword intersection) + free-edit loop — dense resumes reach 92/100; role-tailored rewriter mines GitHub READMEs without fabricating data."
+  AFTER:  "Built deterministic ATS scorer using Node.js, optimizing resumes to 92/100 by analyzing bullet density, action verbs, and JD-keyword intersection."
+The LLM shortened for style and dropped "free-edit loop" and "role-tailored rewriter mines GitHub READMEs without fabricating data." Verifier doesn't guard against this because nothing was invented — just deleted. Punch: content-preservation post-check that rejects the rewrite when it drops more than N atoms from original. Logged in `src/rate/README.md`. Not a Day 5 blocker.
+
+**Files touched (`feature/v2-rate-mode`):** `src/rate/improver.js`, `src/rate/improve-resume.js`, `src/rate/README.md`, `scripts/rate-improve.js`, `PROGRESS.md`.
+
+**Day 6 next:** the **audit report generator** (`src/rate/audit.js`) — turns the improve-resume `audit[]` into the student-facing before/after report shipped alongside the improved PDF. Every change cites BEFORE, AFTER, source line, and the "changes" reason. This is what makes the moat visible to the student (and to any HR who interrogates the resume).
+
+### Session — 2026-07-21 (v2 Day 4: fabrication verifier — the moat, Claude Opus 4.7)
+
+**Context:** Day 3 shipped total 10-point scoring (`b960b0b`). Day 4 goal: build the STRUCTURAL guarantee that the improver LLM cannot invent metrics, tools, companies, or credentials the student never had. This is what makes "no scam" a code contract, not a prompt promise.
+
+**What Day 4 shipped:**
+
+1. **`data/tech-dictionary.json`** — ~400 canonical tech tokens (languages, frameworks, DBs, cloud, tools, ML/data, dev tools, payment gateways, big consumer companies) + 30 aliases (K8s↔Kubernetes, JS↔JavaScript, PG↔PostgreSQL, GH Actions↔GitHub Actions, etc.). Grow by appending; verifier collapses aliases in both directions.
+
+2. **`src/rate/verify.js`** — deterministic content-atom verifier. Extracts atoms from a rewrite:
+   - Numbers with units (50K users, 92%, ₹5 lakh, 20/20, p95 400ms) with normalization (50K == 50000)
+   - Currency amounts (₹, $, Rs)
+   - Ratios (47/47)
+   - Percentiles (p95, p99)
+   - Tech tokens (with alias collapse)
+   - Proper nouns (companies, products, orgs not in the dictionary)
+   For each atom, verifies it appears in the original bullet OR anywhere in source text. Any unverified atom → `ok: false` and the caller MUST reject the rewrite. Two subtleties worth locking in:
+   - **Sentence-start verbs stripped from proper-noun extraction** so "Built ResumeRocket" reduces to the entity "ResumeRocket" (verification bites on the real entity, not on "built" which is naturally in source everywhere). Uses `isVerbForm()` with -ed/-ing/-ied morphology + `re-` prefix strip.
+   - **Multi-word proper nouns require ALL content words in source**, not any. This is what stops "Built ResumeRocket" from passing on the strength of "built" alone.
+
+3. **`scripts/rate-verify.test.js`** — regression suite: 10 legitimate rewrites (must PASS) + 10 fabrication attempts (must FAIL). Wired into `.runtime/check.js` and exposed as `npm run test:rate-verify`. Ran under 200ms.
+
+4. **Wired into `.runtime/check.js`** — verifier suite runs before every commit as the first test in the pre-commit gate. A fabrication that slips through never reaches a student.
+
+**Test evidence:**
+
+**20/20 cases pass on first fixture run** after two rounds of tuning:
+
+Legitimate (all PASS):
+- L1 verb-strengthening
+- L2 restructure preserving all numeric atoms
+- L3 tech extracted from same project line
+- L4 tech extracted from a different project's section
+- L5 rupee metric preserved (₹18,310 Cr → ₹4,711 Cr with SARIMAX added from source)
+- L6 tech extracted from skills section
+- L7 number normalization (50K in rewrite matches 50000 in source by value)
+- L8 proper noun mentioned in source
+- L9 tech alias (GH Actions ↔ GitHub Actions)
+- L10 pure structural / verb-only rewrite
+
+Fabrication (all CAUGHT):
+- F1 invented percent (40%) — caught
+- F2 invented user count (10K+) — caught
+- F3 invented company (Google) — caught
+- F4 invented tech (Docker + Kubernetes + AWS) — caught
+- F5 invented credential (Stanford CS230) — caught
+- F6 mimicked-style metric (500+ delegates, ₹15,00,000) — caught
+- F7 invented product name (ResumeRocket) — caught
+- F8 invented dollar amount ($5,000/month) — caught
+- F9 invented percentile (p99 <120ms) — caught
+- F10 invented ratio (47/47) — caught
+
+**The contract this locks in:** no rewrite containing a metric, tool, company, or product name absent from the source resume can pass verification. A false-reject on a legitimate rewrite is a tuning problem (the improver will safely fall back to verb-strengthening); a false-accept on a fabrication is an interview-killer for the student and a lawsuit vector for us. The suite fails on ANY fabrication slipping through — that's a pre-commit blocker forever.
+
+**Files touched (`feature/v2-rate-mode`):** `data/tech-dictionary.json`, `src/rate/verify.js`, `src/rate/lexicon.js` (added 2 verbs), `src/rate/README.md`, `scripts/rate-verify.test.js`, `.runtime/check.js`, `package.json`, `PROGRESS.md`.
+
+**Day 5 next:** the improver (`src/rate/improver.js`) — LLM rewriter that produces the improved bullets. Uses the full-resume context so it can legitimately reference tech and details from elsewhere. Every output bullet passes through verify.js before being accepted; on rejection, falls back to a deterministic "verb strengthening only" rewrite that never adds new content. Nothing the improver produces reaches a student until verified.
+
+### Session — 2026-07-21 (v2 Day 3: LLM scorer + pdfjs URL merge + full 10-point rubric, Claude Opus 4.7)
+
+**Context:** Day 2 shipped `2047c91` (deterministic 6-point scorer with byte-equal same-input-same-output). Day 3 goal: complete the total 10-point rubric with the 4-point LLM contribution + fix the pdfjs URL extraction limitation blocking Contact subscore.
+
+**What Day 3 shipped:**
+
+1. **`src/rate/score-llm.js`** — 3 LLM subscores:
+   - **Bullet impact (1.0)**: LLM scores each bullet 0/1/2 (activity / activity+scope / achievement with outcome). Single batched call for all bullets (up to MAX_BULLETS=24) so latency ~2-3s regardless of resume length. Weakest 3 bullets (impact=0, prioritized experience > projects > por > achievements) cited as issues with source_line.
+   - **Role Fit (2.0)**: reuses v1's `src/llm/keywords.js#extractKeywords` for jd_intel (role_noun, keywords, top_prioritized_skills). Skills coverage (studentSkills ∩ jd_keywords) + bullets coverage (bullets containing any keyword). Then deterministic — no per-bullet LLM. Missing keywords cited as `role_fit_missing_keywords` issue.
+   - **Grammar polish (1.0)**: single-shot LLM. Tightened prompt after first test over-flagged resume fragments as needing articles ("Built payment service" IS correct; do not suggest "Built a payment service"). Softened penalty curve from 0.2/issue → 0.1/issue.
+   - Runs the 3 subscores in `Promise.all` — total LLM latency ~3-5s uncached.
+
+2. **`src/rate/score-combined.js`** — `scoreAll(input) → { score, subscores, issues, meta }`. Merges deterministic (6.0) + LLM (4.0) into total 10.0. This is what WhatsApp bot + audit report will call.
+
+3. **`scripts/rate-score.js`** — added `--llm` flag. Bar-chart output for all 7 subscores, cited issues sorted by severity, role-fit meta line showing missing keywords.
+
+4. **`src/rate/parse.js`** — pdfjs `page.getAnnotations()` merge. For each Link annotation, computes centroid, finds the line whose y-range covers it, appends the URL inline in parentheses. So the display "LinkedIn" arrives at the LLM extractor as "LinkedIn (https://linkedin.com/in/xyz)". Preserves the source_line anchor invariant (URL lives on the same line as its display text) instead of introducing a separate URL-list field.
+
+**Test evidence:**
+
+| PDF | Total (Backend SWE target) | Det | LLM | Contact | Content-LLM | Role Fit | Grammar |
+|---|---|---|---|---|---|---|---|
+| Meet's | **8.4 / 10** | 5.9/6 | 2.5/4 | **0.90/1** (was 0.50 pre-URL-fix) | 0.83/1 | 0.73/2 | 0.90/1 |
+| Aditya's | **7.4 / 10** | 4.9/6 | 2.5/4 | 0.50/1 | 0.57/1 | 0.89/2 | 1.00/1 |
+
+Meet's URL-fix impact: extract now populates `linkedin`, `github`, `leetcode`, AND all 3 project github_url slots (dm-to-deal, jodhpur-export-intelligence, bharat-resume) — every one was null before Day 3.
+
+Role Fit correctly low for Meet (0.73/2) at "Backend Software Engineer" — his resume is Python/data-focused, missing Java/Node/Spring/REST/microservices/MongoDB. Score honestly reflects "this resume isn't tuned for this specific role"; testing with role="Data Analyst" would produce higher role fit — feature, not bug.
+
+Grammar polish tightening: pre-Day-3 tightening the LLM flagged "8+ sponsorships" as needing "an" article — false flag on a fragment bullet. Post-tightening, only genuine unambiguous errors flagged (line 38 typo caught, "8+ sponsorships" left alone). Meet's grammar 0.40 → 0.90.
+
+**Files touched (`feature/v2-rate-mode`):** `src/rate/score-llm.js`, `src/rate/score-combined.js`, `src/rate/parse.js`, `src/rate/README.md`, `scripts/rate-score.js`, `PROGRESS.md`.
+
+**Day 4 next:** The **fabrication verifier** (`src/rate/verify.js`) — deterministic content-atom check that rejects any rewritten bullet containing atoms (numbers with units, tech tokens, proper nouns) not present in the original. This is the structural guarantee that the improver LLM can never add a metric the student didn't have. Regression test locked in CI: 100 metric-less bullets → 0 metric-adding rewrites allowed. This is the moat.
+
+### Session — 2026-07-21 (v2 Day 2: deterministic scorer + determinism guarantee, Claude Opus 4.7)
+
+**Context:** Day 1 shipped in commit `b1cd7ac`. Day 2 goal: the trust foundation of rate mode — a scorer whose output for the same input is byte-equal every time. Kills "AI slot machine" perception on contact.
+
+**What Day 2 shipped:**
+
+1. **`src/rate/lexicon.js`** — pure data, grep-and-append-friendly:
+   - 145 strong action verbs (Built, Shipped, Optimized, Chaired, Mentored, …)
+   - 26 filler phrases ("responsible for", "worked on", "helped with", "hands-on experience", "passionate about", …)
+   - `CGPA_RE` / `CGPA_BARE_RE` / `BOARD_PCT_RE` India-specific regexes
+   - `METRIC_UNITS_RE` catching numbers-with-units (%, K, M, L, Cr, ms, users, rows, txns, …), currency (₹/$/Rs), bare integers ≥2 chars, and ratios (20/20)
+   - Canonical section-header list with alias collapse (experience/internship/employment → "experience")
+
+2. **`src/rate/score.js`** — deterministic 6-check scorer:
+   - **ATS Compliance (2.0)**: multi-column penalty (parseMeta), canonical-section count
+   - **Contact & Structure (1.0)**: email format, phone digits, LinkedIn URL format (flags legacy `/pub/` as separate issue), GitHub for tech roles
+   - **Content Quality (2.0 of 3.0)**: metric density (full at 70%+), action-verb-start rate (full at 80%+), filler-phrase penalty (up to 0.4)
+   - **Polish (1.0 of 2.0)**: page count (>2 penalized), date-format consistency across education/experience/projects
+   - **India embedded**: CGPA presence, `/10` denominator, 10th/12th %
+   - Every issue carries `{ severity, category, source_line, why, cost }` — `source_line` cites the anchor from extract.js, `structural` when no single line applies
+   - `cacheKey({ text, role })` = `sha256(text + role + RUBRIC_VERSION)`; `RUBRIC_VERSION = 'r1-2026-07-21'` bumps invalidate cached scores automatically
+   - LLM parts of Content Quality (1.0) + Role Fit (2.0) + Polish grammar (1.0) come in Day 3
+
+3. **`scripts/rate-score.js`** — dev CLI: parse → extract → score with bar chart, cited issues, cache key display, and `--verify-cache` flag that scores twice and byte-compares the outputs.
+
+**Test evidence:**
+
+| PDF | Deterministic | ATS | Contact | Content | Polish | Issues | Determinism check |
+|---|---|---|---|---|---|---|---|
+| Meet's (dense tech) | **5.5 / 6** | 2.0 | 0.5 | 2.0 | 1.0 | 4 | ✓ identical (2186 bytes) |
+| Aditya's (fresher basic) | **4.9 / 6** | 2.0 | 0.5 | 1.4 | 1.0 | 8 | ✓ identical (4593 bytes) |
+
+Content Quality is where the scorer discriminates: Meet 100% metric coverage (12/12 bullets carry a number), Aditya 29% (2/7). Aditya's 3 metric-less project bullets cited by source_line 30/32/34 with the exact original wording quoted. Both PDFs' 0.5 Contact hit comes from the pdfjs hyperlink limitation (LinkedIn/GitHub URLs live behind the display text, not extractable without `page.getAnnotations()` merge — Day 2.5 punch).
+
+**Determinism guaranteed:** same PDF + same role + same rubric version → byte-equal `{ score, subscores, issues, cache_key }`. This is the "no one can call it a slot machine" contract. `--verify-cache` on the CLI proves it end-to-end.
+
+**Files touched (`feature/v2-rate-mode`):** `src/rate/lexicon.js`, `src/rate/score.js`, `src/rate/README.md`, `scripts/rate-score.js`, `PROGRESS.md`.
+
+**Day 3 next:** LLM scorer (`src/rate/score-llm.js`) covering the remaining 4 points — bullet impact judgment (1.0), role fit against jd_intel keywords (2.0), grammar polish (1.0). Combined with Day 2 output → total 10.0 score. Also: fix pdfjs URL extraction by merging `page.getAnnotations()` link positions (upgrades Contact subscore from "structural handicap" to "genuine signal").
+
+### Session — 2026-07-20 → 2026-07-21 (v2 Day 1: rate-mode parse + extract with anchors, Claude Opus 4.7)
+
+**Context:** Pilot done, moving to v2. Rate-mode design decisions locked: ship BEFORE broadcast is done (pilot considered complete); score gating = free glimpse (top 3 issues) + ₹49 for full 8-point report and clean PDF; target role MANDATORY at intake. Branched `feature/v2-rate-mode` off main so v1 stays deployable.
+
+**What Day 1 shipped (`src/rate/`):**
+
+1. **`src/rate/parse.js`** — deterministic 3-layer text extraction, NO LLM.
+   - Layer 1: `pdfjs-dist@6.1.200` (upgraded from 4.0.379 to kill an RCE vuln — malicious PDFs could execute arbitrary JS at parse time, which is our exact attack surface for rate mode). Preserves positional info so we get `source_line` anchors + multi-column detection.
+   - Layer 2 fallback: `pdf-parse@2.4.5` on odd producers.
+   - Layer 3: refuse if word count < 100 (probable image-based PDF) with graceful reason (`no-text-extractable` or `text-too-thin-probably-image-pdf`).
+   - `.docx` via `mammoth@1.12.0`.
+   - Hard belt-and-braces: `isEvalSupported: false` on pdfjs to block font-embedded JS.
+   - Line reconstruction bins items by 2pt y-tolerance, joins with x-gap-aware spacing.
+   - `detectMultiColumn()` flags when >25% of lines contain internal x-gaps exceeding 15% of page width.
+
+2. **`src/rate/extract.js`** — LLM structuring, parsed text → `resume_json`. Two invariants:
+   - **GROUNDED:** prompt hard-codes "never invent"; nulls when absent.
+   - **ANCHORED:** every bullet carries `source_line` (1-indexed pointer into `parsed.lines`). Raw source text NOT duplicated into the JSON — halves output tokens AND makes the anchor un-driftable (raw side IS the source).
+   - Output shape matches v1's `render.js` after `flattenForRender()` — so v1 rendering, watermark, upload, delivery all reuse unchanged.
+   - `sanitizeUrls()` nulls out any URL slot that doesn't parse as http(s). Meet's first live test showed the LLM putting hyperlink display text like `"[GitHub]"` into `github_url` because pdfjs strips underlying hrefs — sanitizer catches this.
+   - `rawForAnchor(parsed.lines, source_line)` is the single point-of-access for downstream audit/verifier to look up the original student wording.
+   - Bumped `maxTokens: 3500 → 8000` after Meet's 610-word resume truncated at 3500.
+
+3. **`scripts/rate-parse.js`** — dev CLI. Prints layer used, word/page counts, multi-column flag, first 8 lines, then LLM extract results with completeness summary, anchor validity check, and full `resume_json` dump.
+
+**Test evidence (Meet's own resumes, both real PDFs):**
+
+| PDF | Layer | Words | Extract time | Cost | Anchors valid |
+|---|---|---|---|---|---|
+| `meet_kabra_resume_.pdf` (615-word dense fresher resume) | pdfjs | 610 | 17.9s | $0.00137 | 100% |
+| `resume (6).pdf` (Aditya, 256-word early-career) | pdfjs | 256 | 7.3s | $0.00064 | 100% |
+
+Aditya's resume had NO college name in the source. Extractor correctly left `college: null` instead of inventing one. This is the "grounded" invariant proved out with the first real test.
+
+**Security (Day 1 wins):**
+- `pdfjs-dist` RCE (CVE-worthy — arbitrary JS execution on malicious PDF) eliminated. This was the show-stopper vuln for rate mode.
+- 6 additional high/critical vulns in transitives (body-parser DoS, brace-expansion DoS, js-yaml quadratic CPU, tar path traversal) patched via `npm audit fix`. `npm audit` now 0 vulnerabilities.
+
+**Day 2 punch list (logged, not blocking):**
+- pdfjs strips hyperlink hrefs — display text only (e.g. "LinkedIn", "[GitHub]"). Day 2/3 fix: merge `page.getAnnotations()` link positions back. Also becomes a scoring signal ("bare LinkedIn text without a URL underneath = ATS-compliance flag").
+- Multi-column detection not yet tested against a Canva 2-column template — needs a fixture.
+- `resume_json.summary` from extractor is the source-verbatim summary; the score/reviewer will critique it. Rewrite comes later in v2 improver pass.
+
+**What's next (Day 2):** Deterministic scorer (`src/rate/score.js`) — 6 sub-checks (contact completeness, page count, CGPA presence, metric density %, action-verb start, filler density) computing the numeric parts of ATS-Compliance / Contact / Content-Quality / Polish subscores. Cached by `sha256(text + role + rubric_version)` for same-input-same-output guarantee. This is the trust foundation of "no one can call it a slot machine."
+
+**Files touched (`feature/v2-rate-mode` branch, not main):** `src/rate/parse.js`, `src/rate/extract.js`, `src/rate/README.md`, `scripts/rate-parse.js`, `package.json`, `package-lock.json`.
+
 ### Session — 2026-07-16 → 2026-07-17 (Gunjita live-test bug wave + Meta refusal guardrails + accuracy dashboard, Claude Opus 4.7)
 
 **Context:** Meet started onboarding friends after Meta went LIVE (2026-07-16 morning). First real friend (Gunjita) hit multiple traps we hadn't seen in synthetic tests. Session became a rapid-fire diagnose-fix-ship loop across 12 commits. Also polished admin dashboard for broadcast day. Full trace lives at `REMAINING.md` (created this session).

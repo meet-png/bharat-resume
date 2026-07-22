@@ -1,6 +1,8 @@
 // State machine. PRD §6, §18 Day 2-3.
-const { STATES, NEXT_STATE, OPTIONAL_STATES, PHASE_2_STATES } = require('./states');
+const { STATES, NEXT_STATE, OPTIONAL_STATES, PHASE_2_STATES, RATE_STATES } = require('./states');
 const { pickPrompt, pickMessage, expSlotQuestion } = require('./prompts');
+const rateP = require('./rate-prompts');
+const { handleRateInner } = require('./rate-router');
 const { extractSection, SECTION_CONFIG } = require('../llm/extract');
 const { runGeneration, buildPreview } = require('./generator');
 const { deliverPdf } = require('./delivery');
@@ -131,6 +133,8 @@ function classifyJdInput(text) {
 function newSession() {
   return {
     state: STATES.NEW,
+    mode: null, // 'build' | 'rate' | null (unset until user picks at AWAITING_MODE_SELECT)
+    rate: null, // v2 rate-mode payload — see src/state/rate-router.js
     resume_json: { pending_project: null },
     resume_json_rewritten: null,
     jd_text: null,
@@ -467,7 +471,7 @@ async function composeReply({ session, prev_state, decision, student_last, missi
 // two concurrent inbound messages can't race on the (read-modify-write) session.
 // A message that can't grab the lock within the wait window is told to retry —
 // its text isn't dropped, the student just resends.
-async function handle({ phoneHash, body, phoneFrom }) {
+async function handle({ phoneHash, body, phoneFrom, attachment }) {
   if (!phoneHash) throw new Error('handle: phoneHash required');
   const token = await acquirePhoneLock(phoneHash);
   if (!token) {
@@ -475,16 +479,22 @@ async function handle({ phoneHash, body, phoneFrom }) {
     return pickMessage('busy');
   }
   try {
-    return await handleInner({ phoneHash, body, phoneFrom });
+    return await handleInner({ phoneHash, body, phoneFrom, attachment });
   } finally {
     await releasePhoneLock(phoneHash, token);
   }
 }
 
-async function handleInner({ phoneHash, body, phoneFrom }) {
+// Mode selection patterns — fire only at AWAITING_MODE_SELECT so a mid-flow
+// student saying "rate karo" (unlikely but possible) doesn't accidentally
+// switch modes. Deliberately generous on Hinglish surface forms.
+const MODE_BUILD_RE = /^\s*(1|build|banao|naya|new|create|make|start|nayi resume)\s*$/i;
+const MODE_RATE_RE  = /^\s*(2|rate|review|score|check|existing|rate karvao|score kar\w*|mera resume dekh\w*)\s*$/i;
+
+async function handleInner({ phoneHash, body, phoneFrom, attachment }) {
   const trimmed = String(body || '').trim();
   const phoneShort = phoneHash.slice(0, 12);
-  logger.info({ phoneHash: phoneShort, bodyLen: trimmed.length, bodyHead: trimmed.slice(0, 30) }, 'router.handle inbound');
+  logger.info({ phoneHash: phoneShort, bodyLen: trimmed.length, bodyHead: trimmed.slice(0, 30), hasAttachment: !!attachment }, 'router.handle inbound');
 
   // Rate limit (PRD §13.3).
   const rl = await checkRateLimit(phoneHash);
@@ -494,40 +504,77 @@ async function handleInner({ phoneHash, body, phoneFrom }) {
 
   if (RESET_RE.test(trimmed)) {
     const fresh = newSession();
-    fresh.state = STATES.AWAITING_CONFIRM_START;
+    fresh.state = STATES.AWAITING_MODE_SELECT;
     await setSession(phoneHash, fresh);
-    return pickMessage('reset') + '\n\n' + pickPrompt(STATES.NEW);
-  }
-
-  // Guardrail: student is asking us to rate/review/modify an EXISTING resume
-  // they had before this conversation. Refuse formally and point them at the
-  // "generate new" flow. Fires before any state-specific handler so it's
-  // consistent across NEW / mid-flow / DELIVERED / PAID_COMPLETE.
-  if (REVIEW_EXISTING_RE.test(trimmed)) {
-    logger.info({ phoneHash: phoneHash.slice(0, 12), state: (await getSession(phoneHash))?.state || 'NEW' }, 'refuse: existing-resume review request');
-    return REFUSE_EXISTING_MSG;
+    return pickMessage('reset') + '\n\n' + rateP.modeSelect();
   }
 
   let session = await getSession(phoneHash);
   if (!session) {
     session = newSession();
-    session.state = STATES.AWAITING_CONFIRM_START;
+    session.state = STATES.AWAITING_MODE_SELECT;
     await setSession(phoneHash, session);
-    logEvent({ phoneHash, eventName: 'session_started', state: STATES.AWAITING_CONFIRM_START });
-    return pickPrompt(STATES.NEW);
+    logEvent({ phoneHash, eventName: 'session_started', state: STATES.AWAITING_MODE_SELECT });
+    return rateP.modeSelect();
   }
 
   session.last_message_at = new Date().toISOString();
-  // Persist the WhatsApp address (server-side only, private Redis) so the
-  // post-payment webhook can push the clean PDF outbound. Never logged/exposed.
   if (phoneFrom) session.phone_from = phoneFrom;
-
-  // Bump users.last_active_at fire-and-forget on EVERY inbound message so
-  // the LIVE-now dashboard count reflects actual real-time activity, not
-  // just milestone events. Without this, a student mid Phase-2 Q&A (which
-  // fires no logEvent) drops off the "live" count after N minutes even
-  // while actively chatting.
   bumpUserActivity(phoneHash);
+
+  // ─── Mode selection ─────────────────────────────────────────────────────
+  // Handle before REVIEW_EXISTING_RE — otherwise "rate" at mode-select would
+  // trigger the build-mode refusal guardrail and confuse the student.
+  if (session.state === STATES.AWAITING_MODE_SELECT || (!session.mode && !attachment)) {
+    // PDF arrived unprompted → treat as rate-mode entry (auto-switch).
+    if (attachment) {
+      session.mode = 'rate';
+      session.state = STATES.RATE_AWAITING_PDF;
+      await setSession(phoneHash, session);
+      logEvent({ phoneHash, eventName: 'mode_selected', state: session.state, payload: { mode: 'rate', auto: true } });
+      return handleRateInner({ session, phoneHash, body: trimmed, phoneFrom, attachment, sendWhatsApp });
+    }
+    if (MODE_BUILD_RE.test(trimmed)) {
+      session.mode = 'build';
+      session.state = STATES.AWAITING_CONFIRM_START;
+      await setSession(phoneHash, session);
+      logEvent({ phoneHash, eventName: 'mode_selected', state: session.state, payload: { mode: 'build' } });
+      return pickPrompt(STATES.NEW);
+    }
+    if (MODE_RATE_RE.test(trimmed)) {
+      session.mode = 'rate';
+      session.state = STATES.RATE_AWAITING_PDF;
+      await setSession(phoneHash, session);
+      logEvent({ phoneHash, eventName: 'mode_selected', state: session.state, payload: { mode: 'rate' } });
+      return rateP.askForPdf();
+    }
+    // No recognizable mode pick — re-prompt.
+    if (session.state !== STATES.AWAITING_MODE_SELECT) {
+      session.state = STATES.AWAITING_MODE_SELECT;
+      await setSession(phoneHash, session);
+    }
+    return rateP.modeSelect();
+  }
+
+  // ─── Rate-mode dispatch ─────────────────────────────────────────────────
+  // Everything from here down is BUILD-MODE only. Rate mode dispatches to
+  // its own handler and returns before the build-mode guardrails run.
+  if (session.mode === 'rate' || RATE_STATES.has(session.state)) {
+    return handleRateInner({ session, phoneHash, body: trimmed, phoneFrom, attachment, sendWhatsApp });
+  }
+
+  // Guardrail: student is asking us to rate/review/modify an EXISTING resume
+  // they had before this conversation. In build mode we refuse — the flow is
+  // "generate NEW", not "rate existing". In rate mode this refusal would fire
+  // wrongly on a legitimate "review my resume" intent, so we mode-gate it.
+  if (session.mode === 'build' && REVIEW_EXISTING_RE.test(trimmed)) {
+    logger.info({ phoneHash: phoneHash.slice(0, 12), state: session.state }, 'refuse: existing-resume review request');
+    return REFUSE_EXISTING_MSG + '\n\n_Tip: "rate" likhkar rate-mode me jaao — wahi feature ab available hai._';
+  }
+
+  // Note: session.last_message_at, phone_from, and bumpUserActivity() were
+  // already set at the top of handleInner (mode-agnostic bookkeeping). No
+  // need to repeat them here.
 
   // Helper: clear all Phase 2 sub-state accumulators so a following section
   // starts clean when we force-advance. A stranded pending_experience /

@@ -25,20 +25,36 @@ function getRzp() {
 
 // Creates a ₹49 Razorpay Payment Link. The phone hash (NOT the raw number) is
 // stored in `notes` so the webhook can map the payment back to a session
-// without putting PII in Razorpay's dashboard. Returns { id, short_url }.
-async function createPaymentLink({ phoneHash }) {
+// without putting PII in Razorpay's dashboard. Caller can pass additional
+// `notes` (string values only — Razorpay rejects non-strings) — used by
+// v2 rate mode to mark `flow: 'rate'` so the webhook dispatcher has a
+// belt-and-braces signal even if session state is somehow stale.
+// Returns { id, short_url }.
+async function createPaymentLink({ phoneHash, notes: extraNotes } = {}) {
   if (!phoneHash) throw new Error('createPaymentLink: phoneHash required');
   const rzp = getRzp();
+  // Merge caller notes on top of phone_hash. All values stringified because
+  // Razorpay's notes field only accepts strings — a non-string value gets
+  // the whole request rejected. phone_hash always wins if a caller tries
+  // to overwrite it.
+  const notes = { phone_hash: String(phoneHash) };
+  if (extraNotes && typeof extraNotes === 'object') {
+    for (const [k, v] of Object.entries(extraNotes)) {
+      if (k === 'phone_hash') continue;
+      if (v == null) continue;
+      notes[k] = String(v);
+    }
+  }
   const link = await rzp.paymentLink.create({
     amount: UNLOCK_AMOUNT_PAISE,
     currency: 'INR',
     description: 'BHARAT RESUME - clean ATS-readable PDF unlock',
-    notes: { phone_hash: String(phoneHash) },
+    notes,
     callback_url: `${config.BASE_URL}/payment-success`,
     callback_method: 'get',
     reminder_enable: false,
   });
-  logger.info({ id: link.id, phoneHash: String(phoneHash).slice(0, 12) }, 'razorpay payment link created');
+  logger.info({ id: link.id, phoneHash: String(phoneHash).slice(0, 12), notesKeys: Object.keys(notes) }, 'razorpay payment link created');
   return { id: link.id, short_url: link.short_url };
 }
 

@@ -122,6 +122,24 @@ async function checkRateLimit(phoneHash) {
   return { allowed: count <= RATELIMIT_MAX, count, resetInSec: ttl };
 }
 
+// Rate-mode LLM-cost cap. Rate mode's parse+extract+score+improve chain runs
+// several LLM calls per PDF; without a cap, an attacker who bypasses the
+// per-minute limit could still spin up hundreds of extractions per day and
+// burn OpenAI credit. Cap: MAX_RATE_LLM_CALLS_PER_DAY per phone hash. Counts
+// are stored under `rate_llm:<phoneHash>` with a 24h TTL rolling from the
+// first call. Returns { allowed, count, capPerDay }; caller returns a
+// friendly Hinglish "try again tomorrow" message when denied.
+const MAX_RATE_LLM_CALLS_PER_DAY = 40; // ~10 full rate-mode flows (each = extract + score + improve + rescore)
+const RATE_LLM_WINDOW_SEC = 24 * 60 * 60;
+async function checkRateLlmCap(phoneHash) {
+  const key = `rate_llm:${phoneHash}`;
+  const c = getClient();
+  const count = await c.incr(key);
+  if (count === 1) await c.expire(key, RATE_LLM_WINDOW_SEC);
+  const ttl = await c.ttl(key);
+  return { allowed: count <= MAX_RATE_LLM_CALLS_PER_DAY, count, capPerDay: MAX_RATE_LLM_CALLS_PER_DAY, resetInSec: ttl };
+}
+
 module.exports = {
   getClient,
   getSession,
@@ -133,7 +151,9 @@ module.exports = {
   acquirePhoneLock,
   releasePhoneLock,
   checkRateLimit,
+  checkRateLlmCap,
   SESSION_TTL_SEC,
   RATELIMIT_WINDOW_SEC,
   RATELIMIT_MAX,
+  MAX_RATE_LLM_CALLS_PER_DAY,
 };

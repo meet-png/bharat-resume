@@ -1,0 +1,118 @@
+{
+  "_comment": "Tech tokens the fabrication verifier will recognize as 'tech nouns'. Grow freely — when the verifier rejects a legitimate proper noun, add it here and it stops being flagged. Aliases collapse both directions (K8s and Kubernetes are the same atom). Everything is case-insensitive at match time.",
+  "_version": "d1-2026-07-21",
+
+  "canonical": [
+    "python", "javascript", "typescript", "java", "kotlin", "scala", "go", "golang", "rust", "c", "cpp", "c++", "c#", "csharp", "swift", "objective-c", "ruby", "php", "perl", "r", "julia", "matlab", "dart", "elixir", "erlang", "haskell", "lua", "vba", "bash", "shell", "powershell",
+
+    "html", "css", "sass", "scss", "less",
+
+    "react", "next.js", "nextjs", "vue", "vue.js", "angular", "angularjs", "svelte", "sveltekit", "solid", "preact", "ember", "backbone", "jquery",
+
+    "node.js", "nodejs", "deno", "bun", "express", "nestjs", "fastify", "koa", "hapi",
+
+    "django", "flask", "fastapi", "pyramid", "tornado", "bottle",
+    "spring", "spring boot", "quarkus", "micronaut", "struts",
+    "rails", "ruby on rails", "sinatra",
+    "laravel", "symfony", "codeigniter",
+    "asp.net", "asp.net core", ".net", "dotnet", ".net core",
+    "gin", "echo", "fiber",
+
+    "postgresql", "postgres", "mysql", "mariadb", "sqlite", "oracle", "sql server", "mssql", "db2",
+    "mongodb", "cassandra", "dynamodb", "cosmosdb", "firestore", "redis", "memcached", "elasticsearch", "opensearch", "solr", "clickhouse", "snowflake", "bigquery", "redshift", "databricks", "supabase", "planetscale", "cockroachdb", "tidb", "neo4j", "arangodb", "influxdb", "timescaledb", "prometheus",
+
+    "kafka", "rabbitmq", "activemq", "nats", "pulsar", "kinesis",
+
+    "docker", "kubernetes", "k8s", "helm", "istio", "linkerd", "openshift", "podman", "nomad", "consul", "vault",
+
+    "aws", "amazon web services", "gcp", "google cloud", "azure", "digitalocean", "linode", "heroku", "vercel", "netlify", "render", "railway", "fly.io", "cloudflare", "cloudfront",
+    "ec2", "s3", "lambda", "ecs", "eks", "rds", "sqs", "sns", "cloudwatch", "iam", "vpc", "route53", "api gateway", "cloudformation", "cdk",
+    "gke", "cloud run", "cloud functions", "pub/sub", "cloud storage", "bigquery",
+    "azure functions", "aks", "azure devops",
+
+    "terraform", "ansible", "puppet", "chef", "packer", "pulumi",
+    "jenkins", "github actions", "gitlab ci", "circleci", "travis", "teamcity", "bamboo", "drone", "argocd", "flux", "spinnaker",
+    "git", "github", "gitlab", "bitbucket", "mercurial", "svn",
+
+    "linux", "ubuntu", "debian", "centos", "rhel", "fedora", "alpine", "arch", "macos", "windows",
+
+    "tensorflow", "pytorch", "keras", "jax", "scikit-learn", "sklearn", "pandas", "numpy", "scipy", "matplotlib", "seaborn", "plotly", "xgboost", "lightgbm", "catboost", "huggingface", "transformers", "langchain", "llamaindex", "spacy", "nltk", "opencv", "yolo", "openai", "anthropic", "claude", "gpt", "gemini", "mistral", "llama", "cohere", "chatgpt",
+
+    "sarimax", "arima", "prophet", "arch",
+
+    "streamlit", "dash", "gradio", "power bi", "powerbi", "tableau", "looker", "metabase", "superset", "qlik", "sap", "sas", "spss", "stata",
+
+    "jupyter", "colab", "vscode", "intellij", "pycharm", "webstorm", "eclipse", "vim", "emacs", "sublime",
+
+    "figma", "sketch", "adobe xd", "invision", "framer", "canva", "photoshop", "illustrator", "premiere", "after effects", "davinci resolve", "final cut",
+
+    "jira", "confluence", "notion", "asana", "trello", "monday", "clickup", "linear", "slack", "microsoft teams", "zoom", "google meet", "webex", "discord",
+
+    "salesforce", "hubspot", "zoho", "freshworks", "intercom", "zendesk", "servicenow", "workday", "greenhouse", "lever",
+
+    "excel", "microsoft excel", "google sheets", "microsoft word", "google docs", "microsoft powerpoint", "google slides", "microsoft office",
+
+    "autocad", "solidworks", "catia", "revit", "ansys", "sketchup", "matlab simulink",
+
+    "graphql", "grpc", "rest", "restful", "soap", "websocket", "webrtc", "http", "https", "tcp", "udp",
+    "jwt", "oauth", "oauth2", "openid", "saml", "sso",
+
+    "sql", "nosql", "orm", "sqlalchemy", "prisma", "typeorm", "sequelize", "hibernate", "mongoose",
+
+    "webpack", "vite", "rollup", "parcel", "esbuild", "turbopack", "gulp", "grunt", "npm", "yarn", "pnpm", "pip", "poetry", "maven", "gradle", "sbt", "cargo", "composer", "cocoapods", "swift package manager",
+
+    "jest", "mocha", "chai", "vitest", "cypress", "playwright", "selenium", "puppeteer", "junit", "testng", "pytest", "unittest", "rspec", "cucumber", "postman", "insomnia",
+
+    "cicd", "ci/cd", "devops", "sre", "mlops", "gitops", "iac", "agile", "scrum", "kanban", "waterfall", "tdd", "bdd", "ddd", "microservices", "monorepo", "monolith", "serverless", "faas", "paas", "iaas", "saas",
+
+    "razorpay", "stripe", "paypal", "square", "cashfree", "payu", "ccavenue", "instamojo", "phonepe", "gpay", "paytm", "upi",
+    "meta", "facebook", "instagram", "whatsapp", "twitter", "x", "linkedin", "youtube", "tiktok", "snapchat", "pinterest", "reddit",
+    "google", "microsoft", "apple", "amazon", "netflix", "spotify", "uber", "airbnb", "zomato", "swiggy", "flipkart", "myntra", "paytm", "ola", "byjus", "unacademy", "phonepe", "policybazaar", "razorpay", "cred", "zerodha", "groww", "upstox", "meesho", "nykaa",
+
+    "twilio", "sendgrid", "mailgun", "postmark", "algolia", "cloudinary", "imgix", "auth0", "clerk", "firebase", "fastly", "datadog", "new relic", "sentry", "loggly", "splunk", "grafana",
+
+    "puppeteer", "playwright", "cheerio", "scrapy", "beautifulsoup",
+
+    "handlebars", "ejs", "mustache", "pug", "jinja", "liquid", "jsx", "tsx", "markdown", "mdx", "asciidoc", "restructuredtext", "yaml", "toml", "ini", "json", "xml", "csv", "protobuf", "avro", "parquet"
+  ],
+
+  "aliases": {
+    "k8s": "kubernetes",
+    "js": "javascript",
+    "ts": "typescript",
+    "py": "python",
+    "pg": "postgresql",
+    "psql": "postgresql",
+    "postgres": "postgresql",
+    "mongo": "mongodb",
+    "rails": "ruby on rails",
+    "vue": "vue.js",
+    "vuejs": "vue.js",
+    "nextjs": "next.js",
+    "next": "next.js",
+    "node": "node.js",
+    "nodejs": "node.js",
+    "dotnet": ".net",
+    ".net core": ".net",
+    "spring boot": "spring",
+    "aws sdk": "aws",
+    "amazon web services": "aws",
+    "google cloud": "gcp",
+    "google cloud platform": "gcp",
+    "sklearn": "scikit-learn",
+    "cpp": "c++",
+    "csharp": "c#",
+    "golang": "go",
+    "powerbi": "power bi",
+    "microsoft excel": "excel",
+    "google sheets": "excel",
+    "restful": "rest",
+    "restful api": "rest",
+    "restful apis": "rest",
+    "cicd": "ci/cd",
+    "gh actions": "github actions",
+    "gitactions": "github actions",
+    "meta": "facebook",
+    "x": "twitter"
+  }
+}

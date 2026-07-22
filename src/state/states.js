@@ -1,6 +1,9 @@
 // State constants + transitions. PRD §6.
+// v2 rate-mode states (RATE_*) are additive — build mode never enters them.
+// See src/state/rate-router.js for the rate-mode state machine.
 const STATES = Object.freeze({
   NEW: 'NEW',
+  AWAITING_MODE_SELECT: 'AWAITING_MODE_SELECT',
   AWAITING_CONFIRM_START: 'AWAITING_CONFIRM_START',
   AWAITING_NAME: 'AWAITING_NAME',
   AWAITING_EMAIL: 'AWAITING_EMAIL',
@@ -22,7 +25,30 @@ const STATES = Object.freeze({
   AWAITING_EDIT_OR_DONE: 'AWAITING_EDIT_OR_DONE',
   AWAITING_PAYMENT: 'AWAITING_PAYMENT',
   PAID_COMPLETE: 'PAID_COMPLETE',
+
+  // ─── v2 rate mode ──────────────────────────────────────────────
+  // Entered only when session.mode === 'rate'. Build mode never enters these.
+  RATE_AWAITING_PDF:      'RATE_AWAITING_PDF',
+  RATE_AWAITING_ROLE:     'RATE_AWAITING_ROLE',
+  RATE_SCORING:           'RATE_SCORING',
+  RATE_SHOWING_SCORE:     'RATE_SHOWING_SCORE',
+  RATE_AWAITING_PAYMENT:  'RATE_AWAITING_PAYMENT',
+  RATE_IMPROVING:         'RATE_IMPROVING',
+  RATE_DELIVERED:         'RATE_DELIVERED',
 });
+
+// Rate-mode terminal + collection states. Convenience predicate for the main
+// router / whatsapp.js so mode-aware checks (e.g. "allow PDF upload only in
+// RATE_AWAITING_PDF") don't reach into rate-router internals.
+const RATE_STATES = Object.freeze(new Set([
+  'RATE_AWAITING_PDF',
+  'RATE_AWAITING_ROLE',
+  'RATE_SCORING',
+  'RATE_SHOWING_SCORE',
+  'RATE_AWAITING_PAYMENT',
+  'RATE_IMPROVING',
+  'RATE_DELIVERED',
+]));
 
 // Linear Phase 2 transitions. Phases 4-7 are free-form (PRD §6).
 const NEXT_STATE = Object.freeze({
@@ -81,4 +107,4 @@ const PHASE_2_STATES = new Set([
   STATES.AWAITING_ACHIEVEMENTS,
 ]);
 
-module.exports = { STATES, NEXT_STATE, OPTIONAL_STATES, PHASE_2_STATES };
+module.exports = { STATES, NEXT_STATE, OPTIONAL_STATES, PHASE_2_STATES, RATE_STATES };

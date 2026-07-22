@@ -106,18 +106,38 @@ function renderMetrics(m) {
 <div class="cards">
   <div class="card"><div class="k">Students</div><div class="v">${m.users}</div></div>
   <div class="card"><div class="k">Paid</div><div class="v">${m.paidUsers}</div></div>
-  <div class="card"><div class="k">Conversion</div><div class="v">${m.conversionPct}%</div></div>
-  <div class="card"><div class="k">Revenue</div><div class="v">₹${m.revenueInr}</div></div>
+  <div class="card"><div class="k">Build conv.</div><div class="v">${m.conversionPct}%</div></div>
+  <div class="card"><div class="k">Revenue</div><div class="v">₹${m.revenueInr}</div><div class="k" style="font-size:11px;margin-top:2px">build ₹${m.revenueBreakdown.build} · rate ₹${m.revenueBreakdown.rate}</div></div>
   <div class="card"><div class="k">Avg ATS</div><div class="v">${m.ats.avg == null ? '—' : m.ats.avg}</div></div>
 </div>
 
-<h2>Funnel (% of sessions started)</h2>
+<h2>Mode split</h2>
+<table>
+  ${row('Build mode picked', m.modeSplit.build, Math.max(1, m.modeSplit.total))}
+  ${row('Rate mode picked', m.modeSplit.rate, Math.max(1, m.modeSplit.total))}
+</table>
+
+<h2>Build funnel (% of sessions started)</h2>
 <table>
   ${row('Sessions started', f.session_started, f.session_started)}
   ${row('Resumes delivered', f.resume_delivered, f.session_started)}
   ${row('Payment links created', f.payment_link_created, f.session_started)}
   ${row('Payments succeeded', f.payment_succeeded, f.session_started)}
   ${row('Clean PDFs delivered', f.clean_pdf_delivered, f.session_started)}
+</table>
+
+<h2>Rate funnel (% of rate-mode entrants)</h2>
+<table>
+  ${row('Rate mode entered', m.rateFunnel.entered, Math.max(1, m.rateFunnel.entered))}
+  ${row('PDF ingested', m.rateFunnel.pdf_ingested, Math.max(1, m.rateFunnel.entered))}
+  ${row('Scored (glimpse shown)', m.rateFunnel.scored, Math.max(1, m.rateFunnel.entered))}
+  ${row('Payment link created', m.rateFunnel.payment_link_created, Math.max(1, m.rateFunnel.entered))}
+  ${row('Paid', m.rateFunnel.payment_succeeded, Math.max(1, m.rateFunnel.entered))}
+  ${row('Improved PDF delivered', m.rateFunnel.delivered, Math.max(1, m.rateFunnel.entered))}
+  <tr><td>Refused (bad PDF / parse fail)</td><td class="num">${m.rateFunnel.refused}</td><td></td><td class="num pct">—</td></tr>
+  <tr><td>Cancelled mid-flow</td><td class="num">${m.rateFunnel.cancelled}</td><td></td><td class="num pct">—</td></tr>
+  <tr><td>Rate conversion (scored → paid)</td><td class="num">${m.rateFunnel.conversion_pct}%</td><td></td><td></td></tr>
+  <tr><td>Avg rate score</td><td class="num">${m.rateFunnel.avg_score == null ? '—' : m.rateFunnel.avg_score}</td><td></td><td class="num pct">${m.rateFunnel.score_samples} samples</td></tr>
 </table>
 
 <h2>Edits · Today</h2>

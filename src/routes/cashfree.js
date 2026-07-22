@@ -18,10 +18,24 @@
 // If all three fail, we 500 so Cashfree retries — buying us time to inspect
 // the payload shape in logs.
 const express = require('express');
-const { verifyWebhookSignature, getPhoneHashByLinkId } = require('../payment/cashfree');
-const { fulfillPayment } = require('../payment/fulfill');
+const { verifyWebhookSignature, getPhoneHashByLinkId, UNLOCK_AMOUNT_INR } = require('../payment/cashfree');
+const { fulfillPaymentByMode } = require('../payment/dispatch');
 
 const router = express.Router();
+
+// Server-side amount check. HMAC prevents outsider forgery, but does NOT
+// prevent a MITM'd client from swapping the paylink URL for one with a
+// smaller amount before it reaches the student. If Cashfree ever offers
+// a way for a paylink to be paid at a different amount than we set, this
+// check catches it. Rejects the fulfilment (returns 200 so we don't get
+// stuck in a retry storm; the payment is logged for manual review).
+function verifyAmountInr(amount, currency) {
+  if (currency && String(currency).toUpperCase() !== 'INR') return { ok: false, why: `currency=${currency}` };
+  const n = Number(amount);
+  if (!Number.isFinite(n) || n <= 0) return { ok: false, why: 'amount not finite/positive' };
+  if (Math.abs(n - UNLOCK_AMOUNT_INR) > 0.001) return { ok: false, why: `amount=${n} !== ${UNLOCK_AMOUNT_INR}` };
+  return { ok: true };
+}
 
 router.post('/', express.raw({ type: 'application/json' }), async (req, res) => {
   const sig = req.headers['x-webhook-signature'];
@@ -46,6 +60,9 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
   let phoneHash = null;
   let linkId = null;
   let paymentId = null;
+  let notes = null; // link_notes / order_tags — includes flow marker for v2 rate mode
+  let paidAmount = null;
+  let paidCurrency = 'INR';
 
   if (type === 'PAYMENT_LINK_EVENT') {
     // Link-level event. Only 'PAID' triggers fulfilment; other statuses
@@ -56,7 +73,10 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
     }
     linkId = data.link_id;
     phoneHash = (data.link_notes && data.link_notes.phone_hash) || null;
+    notes = data.link_notes || null;
     paymentId = (data.order && (data.order.transaction_id || data.order.order_id)) || linkId;
+    paidAmount = data.link_amount_paid != null ? data.link_amount_paid : data.link_amount;
+    paidCurrency = data.link_currency || 'INR';
   } else if (type === 'PAYMENT_SUCCESS_WEBHOOK') {
     // Order-level event. Cashfree fires this for every completed payment
     // including link payments. payment_status can be SUCCESS or FAILED —
@@ -70,7 +90,11 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
     // If that changes we still have Redis as a fallback keyed on link_id.
     linkId = data.order && data.order.order_id;
     phoneHash = (data.order && data.order.order_tags && data.order.order_tags.phone_hash) || null;
+    notes = (data.order && data.order.order_tags) || null;
     paymentId = (data.payment && (data.payment.cf_payment_id || data.payment.payment_id)) || linkId;
+    paidAmount = (data.payment && (data.payment.payment_amount != null ? data.payment.payment_amount : data.payment.amount))
+                 || (data.order && data.order.order_amount);
+    paidCurrency = (data.payment && data.payment.payment_currency) || (data.order && data.order.order_currency) || 'INR';
   } else {
     // Any other event Cashfree may forward (settlement, dispute, refund, etc.)
     // — we don't act on these; ack so retries stop.
@@ -99,16 +123,31 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
     return res.status(200).send('unresolvable');
   }
 
+  // Server-side amount check — fires AFTER phone_hash resolution so we can log
+  // the affected student. Rejecting fulfilment on a bad amount is 200-acked
+  // (not 5xx) so we don't stampede Cashfree with retries; the payment is
+  // recorded on Cashfree's dashboard for manual reconciliation.
+  const amountCheck = verifyAmountInr(paidAmount, paidCurrency);
+  if (!amountCheck.ok) {
+    req.log.error({
+      type, linkId, paymentId,
+      phoneHash: String(phoneHash).slice(0, 12),
+      paidAmount, paidCurrency,
+      why: amountCheck.why,
+    }, 'cashfree webhook: amount mismatch — refusing to fulfil');
+    return res.status(200).send('amount mismatch');
+  }
+
   try {
     // paymentId is the dedupe key. cf_payment_id (from success events) and
     // transaction_id (from link events) can differ for the same underlying
     // payment — that's a theoretical duplicate-fulfilment risk if BOTH event
     // types were subscribed. Meet's account only exposes success payment, so
     // this doesn't happen in practice.
-    const result = await fulfillPayment({ phoneHash, paymentId: String(paymentId), linkId });
+    const result = await fulfillPaymentByMode({ phoneHash, paymentId: String(paymentId), linkId, notes });
     return res.status(200).json(result);
   } catch (e) {
-    req.log.error({ err: e.message }, 'fulfillPayment failed');
+    req.log.error({ err: e.message }, 'fulfillment failed');
     return res.status(500).send('processing error');
   }
 });
