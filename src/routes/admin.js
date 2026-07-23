@@ -154,9 +154,77 @@ function renderMetrics(m) {
 </div></body></html>`;
 }
 
+// TEMPORARY (Meet 2026-07-23): demo-mode payload for pilot-marketing screenshots.
+// Gated behind DASHBOARD_DEMO_MODE env var — flip on Railway to swap, flip off
+// to restore live numbers. NEVER default this to on. Remove this whole block
+// once the screenshot cycle is done.
+function demoMetrics() {
+  const now = Date.now();
+  const minAgo = (m) => new Date(now - m * 60 * 1000).toISOString();
+  return {
+    eventTotal: 512,
+    activeNow: 4,
+    recentlyActive: 8,
+    liveWindowMinutes: 3,
+    recentWindowMinutes: 15,
+    users: 64,
+    paidUsers: 38,
+    conversionPct: 64,
+    revenueInr: 1862,
+    revenueBreakdown: { build: 1323, rate: 539 },
+    ats: { avg: 87 },
+    modeSplit: { build: 42, rate: 22, total: 64 },
+    funnel: {
+      session_started: 42,
+      resume_delivered: 38,
+      payment_link_created: 32,
+      payment_succeeded: 27,
+      clean_pdf_delivered: 27,
+    },
+    rateFunnel: {
+      entered: 22,
+      pdf_ingested: 20,
+      scored: 20,
+      payment_link_created: 15,
+      payment_succeeded: 11,
+      delivered: 11,
+      refused: 2,
+      cancelled: 0,
+      conversion_pct: 55,
+      avg_score: 6.8,
+      score_samples: 20,
+    },
+    edits: { free: 47, paid: 22 },
+    today: {
+      session_started: 12,
+      resume_delivered: 10,
+      payment_succeeded: 7,
+    },
+    recent: [
+      { event_name: 'rate_pdf_ingested', state: 'RATE_ASKING_LINKS', at: minAgo(2) },
+      { event_name: 'rate_payment_succeeded', state: 'RATE_IMPROVING', at: minAgo(5) },
+      { event_name: 'rate_delivered', state: 'RATE_DELIVERED', at: minAgo(8) },
+      { event_name: 'session_started', state: 'AWAITING_CONFIRM_START', at: minAgo(11) },
+      { event_name: 'resume_delivered', state: 'DELIVERED', at: minAgo(15) },
+      { event_name: 'payment_succeeded', state: 'PAID_COMPLETE', at: minAgo(18) },
+      { event_name: 'rating_submitted', state: 'RATE_DELIVERED', at: minAgo(24) },
+      { event_name: 'mode_selected', state: 'AWAITING_MODE_SELECT', at: minAgo(32) },
+      { event_name: 'session_started', state: 'AWAITING_CONFIRM_START', at: minAgo(45) },
+      { event_name: 'clean_pdf_delivered', state: 'PAID_COMPLETE', at: minAgo(60) },
+      { event_name: 'edit_requested', state: 'AWAITING_EDIT_OR_DONE', at: minAgo(75) },
+      { event_name: 'rate_score_computed', state: 'RATE_SHOWING_SCORE', at: minAgo(100) },
+      { event_name: 'resume_delivered', state: 'DELIVERED', at: minAgo(120) },
+      { event_name: 'session_started', state: 'AWAITING_CONFIRM_START', at: minAgo(150) },
+      { event_name: 'payment_succeeded', state: 'PAID_COMPLETE', at: minAgo(180) },
+    ],
+  };
+}
+
 router.get('/admin/metrics', basicAuth, async (_req, res) => {
   try {
-    const metrics = await fetchMetrics();
+    const metrics = process.env.DASHBOARD_DEMO_MODE === '1'
+      ? demoMetrics()
+      : await fetchMetrics();
     res.type('html').send(renderMetrics(metrics));
   } catch (e) {
     logger.error({ err: e.message }, 'metrics dashboard failed');
