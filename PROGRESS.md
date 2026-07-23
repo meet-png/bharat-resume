@@ -58,6 +58,85 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 
 ## 3. Session log
 
+### Session — 2026-07-23 (v2 rate-mode UX overhaul from Aditya's live test — cluster issues + scope-aware verify + god-level voice + hobbies + missing-links + honest merge to main, Claude Opus 4.7)
+
+**Context:** v2 rate mode was merged to `main` (commit `2d56e9e`) and Railway auto-deployed. Meet ran the first real live test with his friend Aditya's actual resume PDF (`resume (7).pdf`) and screenshot-dumped a large feedback batch that demanded a UX overhaul + real-optimization work before the pilot broadcast. This session addresses all of it in a single bundle (commit `afdd0b3`).
+
+**What Aditya's test surfaced (Meet's verbatim callouts):**
+
+1. Score glimpse was too verbose — sub-scores were internal noise for the student.
+2. All 3 top issues were the same category ("bullets missing metrics on lines 23, 25, 26") but rendered as 3 separate lines — repetitive, wasteful.
+3. No approximate count per section — student can't feel urgency without "5 issues in Content, 2 in Contact" framing.
+4. Audit report showed BEFORE=AFTER rows for bullets we didn't touch — embarrassing.
+5. Improver produced flat prose — no **bold** on outcomes, no em-dash pattern, missing the god-level voice from `docs/template-reference.md`.
+6. Skills section flattened, bullet indentation lost, project GitHub links missing — real regressions vs original PDF.
+7. **Cross-section tech fabrication:** the improver pulled "SQL" from Aditya's skills section into an OSHRM speaker-committee bullet where SQL wasn't relevant. Verifier caught it at atom-level but context was wrong.
+8. Missing links (LinkedIn/GitHub/project repos) never asked — obvious high-value ₹0-cost fixes ignored.
+9. "Hobbies" section (chess, cricket) rendered as-is — no professional glorification.
+
+**What this session shipped (commit `afdd0b3`, 11 files, +619/-78):**
+
+**Batch 1 — Glimpse + Audit UX (`src/state/rate-prompts.js`, `src/rate/audit.js`):**
+- `renderScoreGlimpse` rewritten: dropped sub-scores block entirely; new `clusterIssues(issues)` groups by category with source_lines listed together ("bullets missing metrics — lines 23, 25, 26"); new `sectionCounts(issues)` shows section-level breakdown ("Content — 5 issues · Contact — 2 · Polish — 3"); severity distribution as emoji row (🔴 3 · 🟡 6 · 🟢 3); urgency CTA ("₹49 unlock — all N issues addressed + clean PDF"). Kept the literal "Score:" label so rate-flow smoke's `/score/i` regex still matches.
+- `audit.js`: added `isShowableRow` filter that skips bullets whose BEFORE and AFTER are byte-identical AND whose change_type is "unchanged"/"skipped" — no more BEFORE=AFTER embarrassment in the audit trail; `renderHeader` collapsed to one-line change summary with score delta arrow ("6 rewritten · 2 verb-only · 3 already strong · 6.5 → 8.2").
+- `CATEGORY_TO_SECTION` + `CATEGORY_SHORT` maps in prompts drive the clustering.
+
+**Batch 2 — Improver quality (`src/rate/improver.js`, `src/rate/improve-resume.js`):**
+- `IMPROVER_SYSTEM` rewritten to embed the god-level voice from `docs/template-reference.md`: bold-on-outcome pattern with explicit examples, em-dash before outcome, action-verb palette listed (Architected, Shipped, Directed, Engineered, Optimized...), explicit NOT list (no soft-skill filler, no padding adjectives, no first-person, no em-dash overuse).
+- `checkTechScope(improvedBullet, originalBullet, entry)`: new deterministic guard against cross-section tech leaks. For each tech token in the improved bullet, requires it to appear in EITHER (a) the original bullet, (b) the same entry's `tech_stack` array, or (c) another bullet of the same entry. Fixes Aditya's "using SQL" leak (SQL was in his skills section but not anywhere in OSHRM's entry). Cross-section leak triggers retry-with-guidance, then safe-fallback.
+- Per-bullet failure classification expanded from 2 → 3 buckets: fabrication vs out-of-scope-tech vs over-compression. `retryGuidance` message adapts to which failure the verifier hit.
+- `improveSection` now passes the entry object down so `checkTechScope` can see `tech_stack` and sibling bullets.
+
+**Batch 3 — Missing-links state (`src/state/rate-router.js`, `src/state/states.js`, `src/state/rate-prompts.js`):**
+- New state `RATE_ASKING_LINKS` between `RATE_AWAITING_PDF` and `RATE_AWAITING_ROLE`.
+- `detectMissingLinks(resume_json)` scans for: missing `contact.linkedin`, missing `contact.github`, and any project with populated `tech_stack` but empty `github_url`.
+- `askForMissingLinks(missing)` renders the batch prompt: "Ye links add karo — abhi bhej de, ya 'skip' likh de. LinkedIn URL, GitHub URL, Project X repo…".
+- `handleAskingLinks(session, body)`: parses URLs via `isHttpUrl` guard; `classifyAndFill(rj, missing, body)` routes each URL by domain (linkedin.com → `contact.linkedin`, github.com/user/repo → project repo by name match, everything else → project `demo_url`); `SKIP_RE_LOCAL` (skip/no/nope/nahi/none) advances without asking again.
+- Telemetry events: `rate_links_filled`, `rate_links_skipped`, `rate_role_changed`.
+
+**Batch 4 — Hobbies rename + glorify (`src/rate/extract.js`, `src/rate/improve-resume.js`, `src/resume/render.js`, `src/templates/resume.hbs`):**
+- `scanInterests(parsedLines)` in extract.js: **deterministic**, non-LLM scan for HOBBIES / INTERESTS / PERSONAL / PASTIMES section headers using `HOBBY_HEADER_RE` + `SECTION_HEADER_RE` boundary detection. Splits on comma/bullet/newline; strips headers; caps at 6 items.
+- `improveInterests(interests, role)` in improve-resume.js: new LLM step (temp 0.4, maxTokens 400) glorifies each hobby into professional framing keyed to target role. Example: "Chess" → "Strategic Thinking & Long-term Planning (Competitive Chess)". Grounded check: output MUST contain original hobby as case-insensitive substring; if not, keep the original hobby (never invent).
+- `INTERESTS_SYSTEM` prompt: emphasizes the "one professional attribute + '(original activity)' " pattern; explicit NOT list (no fake certifications, no invented roles).
+- Wired into `improveResume` Promise.all alongside contact + summary + experience + projects + achievements.
+- `render.js`: added `interests` field to render context (`nonEmptyStrings(r.interests).map(mdBold)`); exposes `interests[]` + `has_interests` boolean.
+- `resume.hbs`: new `{{#if has_interests}}<section><h2>Interests</h2>…{{/if}}` slot after Achievements.
+
+**The hobbies subplot — a gpt-4o-mini schema-loop trap:** initial approach was to add an `interests` field to the LLM extract schema hint. On Aditya's resume (which HAS no hobbies section), `gpt-4o-mini` **looped emitting 12,000 whitespace tokens** — `finish_reason: "length"`, `completion_tokens: 12000`, response was `"\n\n\n\n…"`. Direct extract test without the interests field succeeded in 1,918 tokens. Diagnosed via the new `finish_reason` logging in `src/llm/client.js` (see below). **Fix:** moved hobbies detection to a deterministic post-parse scan; the LLM never sees interests as a schema field. Lesson worth writing to memory: adding a field to a gpt-4o-mini schema can cause it to loop when the source doesn't contain that field — prefer deterministic scans for regex-detectable content.
+
+**LLM client diagnostic (`src/llm/client.js`):** on JSON parse failure, log now includes `finish_reason`, `completion_tokens`, and `rawTail` (last 120 chars of the raw response). This is what caught the hobbies loop within one run — distinguishes "length" (max_tokens truncation) from "stop" (finished but malformed) from "content_filter" (blocked, retry won't help). Small change, huge diagnostic value.
+
+**V1 fix ridealong:** `rating_submitted` was missing from `EVENT_NAMES` allowlist — the post-delivery 1-5 star ratings in v1 build mode were being silently dropped by the telemetry writer. Added, along with the new `rate_role_changed` / `rate_links_filled` / `rate_links_skipped` rate events.
+
+**Regression state:**
+- `test:rate-verify` (fabrication guard): **20/20 green** ✓
+- `rate-flow.smoke.js` (state machine): **7/7 green** ✓
+- `rate-and-build.smoke.js` (cross-mode contamination): **29/29 green** ✓
+- `rate-fulfill.smoke.js` (payment fulfillment E2E): **13/13 green** ✓
+
+Zero regressions. Pushed to `main`. Railway auto-deployed.
+
+**What's honestly still NOT fixed (deferred, discussed with Meet):**
+
+1. **The "shameful re-upload" case** — Meet's quote: *"it will be really shameful if a student who just paid and got a improvised resume and put it to a test again in the bot itself and then the bot is telling the improvement again"*. Root cause: the verifier BLOCKS metric fabrication, so if a bullet has no metric in the source ("Applied OOP principles"), the improver strengthens the verb + adds bold on the outcome but STILL cannot inject a number. Student re-uploads → same "no measurable outcome" issue flagged on that bullet. This session's UX changes cluster the issues honestly but don't solve the underlying oversell. Two proposed fixes discussed with Meet:
+   - **Option A (fast, ~30 lines):** split issues in the glimpse into "✍ We fix: N issues" (verb strengthening, restructure, in-scope tech, bold) vs "📝 You add: N issues" (metrics we won't invent, missing LinkedIn URL, missing CGPA). Sets honest expectations. Student sees exactly what ₹49 buys.
+   - **Option B (real value-add, ~200 lines + 1 state):** post-payment "give me metrics" flow — for each metric-less bullet, ask the student for the impact ("Kitne users? Kitne screens? Kitni files?"); improver then adds the student-provided number (still grounded, not invented). Real score jump. Re-upload actually shows improvement.
+   - **Meet's call pending.** My recommendation: ship BOTH — A now (small, immediate honesty), B as the real product upgrade with a UX design chat first.
+
+2. **"Your resume is already good enough" case — LOCKED 2026-07-23**: score ≥ **8.5** (Meet reduced from 9.0), zero CRITICAL issues, ≤ 2 MINOR issues, all contact fields present, word count 350-800, no multi-column / no Canva refuse triggers. Response: "Aapka resume already strong hai (X.X/10). Yahan koi major fix nahi banata. Minor polish chahiye to ₹49 unlock, warna aap already set ho." Implementation: gate lives in `rate-router.js` between `scoreAll()` result and `renderScoreGlimpse` — if criteria met, send the "already good" message instead of the glimpse; student can still tap "pay" for minor polish + clean PDF.
+
+**Files touched (`main`):** `src/llm/client.js`, `src/rate/audit.js`, `src/rate/extract.js`, `src/rate/improve-resume.js`, `src/rate/improver.js`, `src/resume/render.js`, `src/state/rate-prompts.js`, `src/state/rate-router.js`, `src/state/states.js`, `src/telemetry/events.js`, `src/templates/resume.hbs`, `PROGRESS.md`.
+
+**Follow-up shipped same session (2026-07-23, uncommitted at time of writing):**
+- **Option A** — `src/state/rate-prompts.js`: `FIXABILITY` map + `splitClusters` + `summarizeBucket`; glimpse renders "✍ We fix (N): weak verbs · role-fit · filler · grammar" and "📝 You add (M): missing metrics · LinkedIn URL · CGPA" blocks. ₹49 CTA honestly claims only "we fix" count. Trailing nudge: *"You add items rehte hain aap ke haath me — resume me daal ke wapas rate karvao, score jump kar jayegi."* — soft path to voluntary re-upload without promising Option B.
+- **Already-good gate (8.5)** — `src/state/rate-router.js`: `isAlreadyGood({score, issues, wordCount})` fires between `scoreAll()` and glimpse. Criteria: score ≥ 8.5 AND zero CRITICAL AND ≤2 MINOR AND no contact_email/phone_missing AND word count 350-800. Bypass sends `p.alreadyGood(...)`: *"Aapka resume already strong hai (X.X/10). Yahan koi major fix nahi banata."* Pay path stays open for clean PDF + minor polish. New `rate_already_good` event added to allowlist.
+- **Option B parked** — Meet's call 2026-07-23: skip B for now, revisit if pilot surfaces re-upload complaints. Full design captured above in the top of this session entry so future sessions can pick it up cold.
+- Regression: rate-verify 20/20 · rate-flow 7/7 · rate-and-build 29/29 · rate-fulfill 13/13, all green post-changes. Rate-flow smoke's Step 4 confirms already-good gate fires on Meet's own resume (9.3/10) and still satisfies `/score/i` + `/₹49/i` assertions.
+
+**Next session priorities:**
+1. Second live-test round on Meet's + Aditya's + one more friend's resume — verify Batch 1-5 + Option A + already-good gate work end-to-end on real PDFs.
+2. Monitor pilot for re-upload complaints — that's the signal to un-park Option B.
+
 ### Session — 2026-07-23 (v2 Day 9: merge readiness — cross-mode smoke, admin dashboard, RATE_MODE.md reference doc, Claude Opus 4.7)
 
 **Context:** Days 1-8 built rate mode as a complete, paid-shippable pipeline. Day 9 goal: make it safe to merge to main. Three deliverables — a cross-mode contamination test (highest safety value), admin dashboard extensions for rate funnel metrics (operational visibility for the pilot broadcast), and `docs/RATE_MODE.md` (future-Claude reference so a cold session can pick up rate-mode context without re-reading 15 files).

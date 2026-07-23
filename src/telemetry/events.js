@@ -37,6 +37,7 @@ const EVENT_NAMES = Object.freeze([
   'rate_links_filled',
   'rate_links_skipped',
   'rate_score_computed',
+  'rate_already_good',
   'rate_payment_link_created',
   'rate_payment_succeeded',
   'rate_improved',

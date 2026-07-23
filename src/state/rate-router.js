@@ -159,6 +159,31 @@ const RESET_RE_LOCAL = /^\s*reset\s*$/i;
 
 const UNLOCK_AMOUNT = 49;
 
+// "Already good" gate (Meet 2026-07-23). Bypass the standard glimpse when the
+// resume already meets a strong bar — don't manufacture 12 fake "issues" out
+// of a solid resume just to justify ₹49. Student can still pay for clean PDF
+// + minor polish + audit report if they want.
+//
+// Criteria — ALL must hold:
+//   score ≥ 8.5                       (Meet's threshold, 2026-07-23)
+//   0 CRITICAL issues
+//   ≤ 2 MINOR issues
+//   no contact_email_missing / contact_phone_missing in issues
+//   word count 350-800                (too thin OR padded → still needs work)
+function isAlreadyGood({ score, issues, wordCount }) {
+  if (!(score >= 8.5)) return false;
+  const iss = Array.isArray(issues) ? issues : [];
+  const critical = iss.filter((i) => i.severity === 'CRITICAL').length;
+  const minor = iss.filter((i) => i.severity === 'MINOR').length;
+  if (critical > 0) return false;
+  if (minor > 2) return false;
+  const contactMissing = iss.some((i) =>
+    i.category === 'contact_email_missing' || i.category === 'contact_phone_missing');
+  if (contactMissing) return false;
+  if (typeof wordCount === 'number' && (wordCount < 350 || wordCount > 800)) return false;
+  return true;
+}
+
 // Trim / normalize source data we store on the session so Redis payload
 // doesn't balloon. We keep just what downstream needs:
 //   source_text — full parsed text (for scoring's text-side checks + audit anchors)
@@ -368,6 +393,17 @@ async function handleAwaitingRole({ session, phoneHash, body, phoneFrom, sendWha
   session.state = STATES.RATE_SHOWING_SCORE;
   await setSession(phoneHash, session);
   logEvent({ phoneHash, eventName: 'rate_score_computed', state: session.state, payload: { score: scored.score, issue_count: scored.issues.length } });
+
+  // Already-good gate: skip the "12 issues" theatre when the resume is genuinely strong.
+  const wordCount = (session.rate.source_text || '').split(/\s+/).filter(Boolean).length;
+  if (isAlreadyGood({ score: scored.score, issues: scored.issues, wordCount })) {
+    logEvent({ phoneHash, eventName: 'rate_already_good', state: session.state, payload: { score: scored.score, word_count: wordCount } });
+    return p.alreadyGood({
+      score: scored.score,
+      role: session.rate.role,
+      unlockAmount: UNLOCK_AMOUNT,
+    });
+  }
 
   return p.renderScoreGlimpse({
     score: scored.score,

@@ -164,7 +164,57 @@ const CATEGORY_SHORT = {
   india_boards_missing:       '10th/12th % missing',
 };
 
+// Fixability classification (Meet 2026-07-23). WE_FIX = improver can address
+// without new student input; YOU_ADD = student must provide a fact we won't
+// invent. Drives the honest ₹49 pitch — glimpse now splits issues into
+// "we fix in your improved PDF" vs "you add — free, we won't fabricate".
+const FIXABILITY = {
+  content_missing_metric:          'you_add',
+  content_low_impact:              'we_fix',
+  content_weak_verb:               'we_fix',
+  content_filler_phrase:           'we_fix',
+  content_metric_density_low:      'you_add',
+  content_no_bullets:              'we_fix',
+  role_fit_missing_keywords:       'we_fix',
+  ats_multi_column:                'you_add',
+  ats_weak_structure:              'we_fix',
+  polish_page_count_high:          'we_fix',
+  polish_date_format_inconsistent: 'we_fix',
+  polish_grammar:                  'we_fix',
+  contact_email_missing:           'you_add',
+  contact_phone_missing:           'you_add',
+  contact_linkedin_missing:        'you_add',
+  contact_linkedin_legacy_format:  'we_fix',
+  contact_github_missing:          'you_add',
+  india_cgpa_missing:              'you_add',
+  india_cgpa_missing_denominator:  'we_fix',
+  india_boards_missing:            'you_add',
+};
+
 function sevWeight(s) { return s === 'CRITICAL' ? 3 : s === 'MEDIUM' ? 2 : 1; }
+
+function splitClusters(clusters) {
+  const weFix = [], youAdd = [];
+  for (const c of clusters) {
+    const bucket = FIXABILITY[c.category] === 'you_add' ? youAdd : weFix;
+    bucket.push(c);
+  }
+  return { weFix, youAdd };
+}
+
+function bucketCount(clusters) { return clusters.reduce((n, c) => n + c.count, 0); }
+
+function summarizeBucket(clusters) {
+  if (!clusters.length) return '';
+  const seen = new Set();
+  const labels = [];
+  for (const c of clusters) {
+    if (seen.has(c.short)) continue;
+    seen.add(c.short);
+    labels.push(c.short);
+  }
+  return labels.join(' · ');
+}
 
 function clusterIssues(issues) {
   const groups = new Map();
@@ -242,15 +292,53 @@ function renderScoreGlimpse({ score, issues, role, unlockAmount = 49 }) {
   }
   lines.push('');
 
+  // Fixability split. Honest about what ₹49 buys vs what stays with the student.
+  // Meet 2026-07-23: prevents the "re-upload and see same issues" embarrassment
+  // by naming upfront which issues we CAN'T address (metrics we won't invent,
+  // missing URLs, CGPA).
+  const { weFix, youAdd } = splitClusters(clusters);
+  const weFixN = bucketCount(weFix);
+  const youAddN = bucketCount(youAdd);
+
   lines.push('━━━━━━━━━━━━━━━');
+  if (weFixN > 0) {
+    lines.push(`✍ *We fix (${weFixN}):*  ${summarizeBucket(weFix)}`);
+  }
+  if (youAddN > 0) {
+    lines.push(`📝 *You add (${youAddN}):*  ${summarizeBucket(youAdd)}`);
+  }
+  lines.push('');
+
   lines.push(`🔓 *₹${unlockAmount} unlock:*`);
-  lines.push(`   • All ${total} issues addressed`);
-  lines.push('   • Clean improved PDF (no watermark)');
+  if (weFixN > 0) {
+    lines.push(`   • All ${weFixN} "we fix" items land in your improved PDF`);
+  } else {
+    lines.push('   • Clean improved PDF with polish + role-fit tweaks');
+  }
+  lines.push('   • Clean PDF (no watermark)');
   lines.push('   • Full audit — every change cites your original line');
   lines.push('');
+  if (youAddN > 0) {
+    lines.push('_"You add" items rehte hain aap ke haath me — resume me daal ke wapas rate karvao, score jump kar jayegi._');
+    lines.push('');
+  }
   lines.push('Reply *"pay"*  ·  *"change role"*  ·  *"cancel"*');
   return lines.join('\n');
 }
+
+// "Already good" case (Meet 2026-07-23). Gate criteria live in rate-router.js
+// (isAlreadyGood): score ≥ 8.5 · zero CRITICAL · ≤2 MINOR · all contact fields
+// · 350-800 words · no refuse triggers. Bypasses the full glimpse — no need
+// to make the student feel their strong resume has 12 issues.
+const alreadyGood = ({ score, role, unlockAmount = 49 }) =>
+  `✨ *Aapka resume already strong hai — Score: ${score.toFixed(1)} / 10*  ·  ${role}\n\n` +
+  'Yahan koi major fix nahi banata. Minor polish + role-fit tweaks kar sakte hain, but honestly aap already set ho.\n\n' +
+  '━━━━━━━━━━━━━━━\n' +
+  `🔓 *₹${unlockAmount} unlock:*\n` +
+  '   • Clean PDF (no watermark)\n' +
+  '   • Minor polish + role-fit audit\n' +
+  '   • Every change traces to your source line\n\n' +
+  'Reply *"pay"*  ·  *"change role"*  ·  *"cancel"*';
 
 const payIntro = ({ payUrl, unlockAmount = 49 }) =>
   `💳 *₹${unlockAmount} UPI payment link:*\n\n${payUrl}\n\n` +
@@ -296,6 +384,7 @@ module.exports = {
   refuseNonPdf,
   askForPdfNoText,
   renderScoreGlimpse,
+  alreadyGood,
   payIntro,
   improving,
   cancelled,
