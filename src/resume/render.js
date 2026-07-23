@@ -213,6 +213,12 @@ function prepResume(r0) {
 
   const achievements = nonEmptyStrings(r.achievements).map((a) => safe(mdBold(a)));
 
+  // Interests — added 2026-07-23 for rate-mode's hobbies-glorify flow.
+  // Values are LLM-rewritten from raw hobbies (e.g. "chess" → "Strategic
+  // Thinking & Long-term Planning (Competitive Chess)"). Stored as plain
+  // strings; markdown-bold parsed same way as achievements.
+  const interests = nonEmptyStrings(r.interests).map((a) => safe(mdBold(a)));
+
   const skill_categories = buildSkillCategories(r.skills);
 
   return {
@@ -226,6 +232,7 @@ function prepResume(r0) {
     por,
     certifications,
     achievements,
+    interests,
     has_education:    education.length > 0,
     has_skills:       skill_categories.length > 0,
     has_experience:   experience.length > 0,
@@ -233,6 +240,7 @@ function prepResume(r0) {
     has_por:          por.length > 0,
     has_certs:        certifications.length > 0,
     has_achievements: achievements.length > 0,
+    has_interests:    interests.length > 0,
   };
 }
 

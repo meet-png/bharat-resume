@@ -34,6 +34,8 @@ const EVENT_NAMES = Object.freeze([
   'rate_extract_quality_refused',
   'rate_role_captured',
   'rate_role_changed',
+  'rate_links_filled',
+  'rate_links_skipped',
   'rate_score_computed',
   'rate_payment_link_created',
   'rate_payment_succeeded',

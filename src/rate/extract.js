@@ -165,10 +165,9 @@ Extract now. Output only the JSON object.`;
     user,
     model: config.LLM_PRIMARY,
     temperature: 0.1,  // near-zero to keep extraction deterministic across re-runs
-    // 3500 truncated dense resumes mid-JSON on the first live test (Meet's own
-    // 610-word resume produced ~3800 output tokens with raw_text per bullet).
-    // 8000 leaves headroom for two-page technical resumes without paying more
-    // than a few tenths of a cent extra at gpt-4o-mini rates.
+    // Extract output can be large: every bullet, every education/cert entry,
+    // has a source_line + text. Meet's dense 610-word resume produces ~3800
+    // output tokens; 8000 leaves comfortable headroom.
     maxTokens: 8000,
   });
 
@@ -214,7 +213,42 @@ function flattenForRender(rj) {
   if (Array.isArray(clone.achievements)) {
     clone.achievements = clone.achievements.map((a) => (typeof a === 'string' ? a : a.text || ''));
   }
+  if (Array.isArray(clone.interests)) {
+    clone.interests = clone.interests.map((a) => (typeof a === 'string' ? a : a.text || ''));
+  }
   return clone;
+}
+
+// Deterministic hobby-section scanner. Runs after the LLM extract to detect
+// HOBBIES / INTERESTS / PERSONAL / PASTIMES / EXTRACURRICULAR sections
+// without adding a schema field that made gpt-4o-mini loop (2026-07-23 bug —
+// when interests was in the LLM schema, model emitted 12K whitespace tokens
+// on resumes without a hobbies section). Runs off the parsed lines directly.
+const HOBBY_HEADER_RE = /^\s*(hobbies|interests|personal interests|pastimes|extracurricular activities?|extra[- ]curricular|leisure activities?)\s*:?\s*$/i;
+const SECTION_HEADER_RE = /^\s*(summary|profile|about|about me|objective|education|experience|work experience|professional experience|skills|technical skills|projects|academic projects|certifications|certificates|achievements|awards|honors|positions of responsibility|por|leadership|publications|volunteer|references|contact|contact information)\s*:?\s*$/i;
+
+function scanInterests(parsedLines) {
+  if (!Array.isArray(parsedLines) || parsedLines.length === 0) return [];
+  const out = [];
+  let inHobbies = false;
+  for (let i = 0; i < parsedLines.length; i++) {
+    const l = parsedLines[i];
+    const t = String(l.text || '').trim();
+    if (!t) continue;
+    if (HOBBY_HEADER_RE.test(t)) { inHobbies = true; continue; }
+    if (inHobbies && SECTION_HEADER_RE.test(t)) break; // next section starts
+    if (!inHobbies) continue;
+    // Bullet-like lines (with leading marker) or short comma/pipe-separated lists
+    const cleaned = t.replace(/^[\s•·\-\*—–]+/, '').trim();
+    if (!cleaned || cleaned.length > 200) continue;
+    // Split "Chess, Reading, Cricket" or "Chess | Reading | Cricket" into items
+    const parts = cleaned.split(/\s*[,|;]\s*/).map((p) => p.trim()).filter(Boolean);
+    for (const p of parts) {
+      if (p.length >= 2 && p.length <= 80) out.push({ text: p, source_line: l.n });
+    }
+  }
+  // Cap the number kept — a real resume rarely has more than 6 hobbies.
+  return out.slice(0, 6);
 }
 
 // Look up the raw source line for a given source_line anchor from the parsed
@@ -286,4 +320,4 @@ function checkExtractionQuality({ resume_json, parsedText, parsedLineCount }) {
   return null;
 }
 
-module.exports = { extract, flattenForRender, rawForAnchor, checkExtractionQuality };
+module.exports = { extract, flattenForRender, rawForAnchor, checkExtractionQuality, scanInterests };

@@ -124,13 +124,21 @@ async function complete({ system, user, model = config.LLM_PRIMARY, temperature 
     }
 
     const raw = res.choices?.[0]?.message?.content || '{}';
+    const finishReason = res.choices?.[0]?.finish_reason;
     try {
       const data = JSON.parse(raw);
       return { data, usage: res.usage, model: res.model, attempts: attempt };
     } catch {
       lastErr = new Error(`LLM returned invalid JSON (attempt ${attempt}): ${raw.slice(0, 200)}`);
-      logger.warn({ attempt, model, rawHead: raw.slice(0, 120) }, 'llm json parse failed');
-      // JSON-parse retry has no delay — it's model variance, not network.
+      // finish_reason distinguishes 'length' (truncated at max_tokens) from
+      // 'stop' (model finished but produced malformed JSON — usually recoverable
+      // via retry) and 'content_filter' (blocked, retry won't help).
+      logger.warn({
+        attempt, model,
+        finish_reason: finishReason,
+        completion_tokens: res.usage?.completion_tokens,
+        rawTail: raw.slice(-120),
+      }, 'llm json parse failed');
     }
   }
   throw lastErr;

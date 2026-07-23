@@ -29,6 +29,7 @@ const STATES = Object.freeze({
   // ─── v2 rate mode ──────────────────────────────────────────────
   // Entered only when session.mode === 'rate'. Build mode never enters these.
   RATE_AWAITING_PDF:      'RATE_AWAITING_PDF',
+  RATE_ASKING_LINKS:      'RATE_ASKING_LINKS', // between PDF and role — proactively ask for missing critical URLs
   RATE_AWAITING_ROLE:     'RATE_AWAITING_ROLE',
   RATE_SCORING:           'RATE_SCORING',
   RATE_SHOWING_SCORE:     'RATE_SHOWING_SCORE',
@@ -42,6 +43,7 @@ const STATES = Object.freeze({
 // RATE_AWAITING_PDF") don't reach into rate-router internals.
 const RATE_STATES = Object.freeze(new Set([
   'RATE_AWAITING_PDF',
+  'RATE_ASKING_LINKS',
   'RATE_AWAITING_ROLE',
   'RATE_SCORING',
   'RATE_SHOWING_SCORE',

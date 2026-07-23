@@ -261,5 +261,14 @@
   </section>
   {{/if}}
 
+  {{#if has_interests}}
+  <section>
+    <h2>Interests</h2>
+    <ul class="achievements-list">
+      {{#each interests}}<li>{{{this}}}</li>{{/each}}
+    </ul>
+  </section>
+  {{/if}}
+
 </body>
 </html>

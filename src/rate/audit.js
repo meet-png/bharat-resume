@@ -51,11 +51,14 @@ function trunc(s, cap) {
   return t.length <= cap ? t : t.slice(0, cap - 1).trimEnd() + '…';
 }
 
-// Render one bullet's diff. Format kept minimal to survive WhatsApp render:
-//   • [Experience · line 22]
-//   BEFORE Sourced and secured 20+ international speakers…
-//   AFTER  Sourced and secured 20+ international speakers across 3 conferences…
-//   why    Restructured for clarity and impact.
+// A row is "showable" in the diff if we actually rewrote it. Unchanged and
+// skipped rows would show BEFORE == AFTER which looks embarrassing (Meet's
+// 2026-07-23 feedback) — those get summarised in the header count instead.
+function isShowableRow(row) {
+  return row.mode === 'llm' || row.mode === 'llm-retry' || row.mode === 'safe-fallback';
+}
+
+// Render one bullet's diff. Format kept minimal to survive WhatsApp render.
 function renderRowText(row, index) {
   const sectionLabel = SECTION_LABELS[row.section] || row.section;
   const anchor = row.source_line ? `line ${row.source_line}` : 'no line anchor';
@@ -76,27 +79,29 @@ function renderRowText(row, index) {
   return lines.join('\n');
 }
 
-// Build the report header — score summary line, tally, and a one-line
-// explanation of the moat so students who screenshot it can verify our claim.
+// Header — one compact block. Score delta, one-line change summary, and a
+// short trust statement. No verbose explanations; the per-bullet diffs below
+// already show what happened.
 function renderHeader({ role, scoreBefore, scoreAfter, tally, meta }) {
   const lines = [];
-  lines.push('BHARAT RESUME — Resume Audit');
-  if (role) lines.push(`For target role: ${role}`);
+  lines.push('*BHARAT RESUME — Audit*');
+  if (role) lines.push(`Role: ${role}`);
   if (scoreBefore != null && scoreAfter != null) {
-    lines.push(`Score  ${scoreBefore.toFixed(1)} → ${scoreAfter.toFixed(1)}  (of 10)`);
+    const delta = scoreAfter - scoreBefore;
+    const arrow = delta > 0 ? '↑' : delta < 0 ? '↓' : '→';
+    lines.push(`Score: ${scoreBefore.toFixed(1)} → ${scoreAfter.toFixed(1)} / 10 (${arrow} ${Math.abs(delta).toFixed(1)})`);
   } else if (scoreBefore != null) {
-    lines.push(`Score before improvements: ${scoreBefore.toFixed(1)} / 10`);
+    lines.push(`Score: ${scoreBefore.toFixed(1)} / 10`);
   }
+  // Single-line change summary
+  const parts = [];
+  const rewritten = (tally.llm || 0) + (tally.retry || 0);
+  if (rewritten) parts.push(`${rewritten} rewritten`);
+  if (tally.fallback) parts.push(`${tally.fallback} verb-only`);
+  if (tally.unchanged) parts.push(`${tally.unchanged} already strong`);
+  if (parts.length) lines.push(`Bullets: ${parts.join(' · ')}`);
   lines.push('');
-  lines.push('Changes made:');
-  lines.push(`• ${tally.llm} bullets improved by the AI + auto-verified`);
-  if (tally.retry) lines.push(`• ${tally.retry} bullets improved after 1 retry (first pass added or dropped content — re-tried)`);
-  if (tally.fallback) lines.push(`• ${tally.fallback} bullets got a safe verb-strengthening (AI could not rewrite without inventing)`);
-  if (tally.unchanged) lines.push(`• ${tally.unchanged} bullets left as-is (already strong)`);
-  lines.push('');
-  lines.push('Every metric, tool, and detail below traces back to your original resume.');
-  lines.push('If you spot something we invented, that is a bug — please report it.');
-  if (meta && meta.rubric_version) lines.push(`_rubric ${meta.rubric_version}_`);
+  lines.push('_Every atom in AFTER traces back to your original. Report a bug if not._');
   return lines.join('\n');
 }
 
@@ -138,7 +143,11 @@ function chunkForWhatsApp(fullText) {
 function renderAuditText({ audit, role, scoreBefore, scoreAfter, meta }) {
   const tally = tallyModes(audit);
   const header = renderHeader({ role, scoreBefore, scoreAfter, tally, meta });
-  const grouped = groupBySection(audit);
+  // Only render bullets that actually got a rewrite. Unchanged / skipped
+  // rows are already summarised in the header count line — showing them as
+  // BEFORE=AFTER made the report look wasteful and eroded trust.
+  const showable = (audit || []).filter(isShowableRow);
+  const grouped = groupBySection(showable);
 
   const sections = [];
   let idx = 0;

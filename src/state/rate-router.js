@@ -5,11 +5,12 @@
 // Flow:
 //   AWAITING_MODE_SELECT  → user picks build / rate
 //   RATE_AWAITING_PDF     → user uploads PDF/DOCX attachment
+//   RATE_ASKING_LINKS     → (conditional) ask student to fill missing critical URLs
 //   RATE_AWAITING_ROLE    → user types target role
 //   RATE_SCORING          → scoring runs inline; user sees glimpse
 //   RATE_SHOWING_SCORE    → user replies pay / cancel
 //   RATE_AWAITING_PAYMENT → payment link sent; waiting for webhook
-//   RATE_IMPROVING        → improver runs; PDF + audit report delivered (Day 8+)
+//   RATE_IMPROVING        → improver runs; PDF + audit report delivered
 //   RATE_DELIVERED        → terminal
 //
 // Every attachment / body pair reaches this handler with a session that has
@@ -18,7 +19,7 @@
 
 const { STATES } = require('./states');
 const { parse } = require('../rate/parse');
-const { extract, flattenForRender, checkExtractionQuality } = require('../rate/extract');
+const { extract, flattenForRender, checkExtractionQuality, scanInterests } = require('../rate/extract');
 const { scoreAll } = require('../rate/score-combined');
 const p = require('./rate-prompts');
 const { setSession, checkRateLlmCap } = require('../store/redis');
@@ -29,6 +30,120 @@ const logger = require('../logger');
 const CANCEL_RE = /^\s*(cancel|back|exit|quit|stop|reset|switch|change mode)\s*$/i;
 const BUILD_SWITCH_RE = /^\s*(build|1|naya|new|banao|create)\s*$/i;
 const PAY_RE = /^\s*(pay|pay now|unlock|buy|purchase|₹?\s*49|haan pay|yes pay|ok pay)\s*$/i;
+const SKIP_RE_LOCAL = /^\s*(skip|no|nahi|nope|none|nothing)\s*$/i;
+
+// ─── Missing-link detection ─────────────────────────────────────────────
+// Runs on the extracted resume_json right after PDF ingest. Every returned
+// entry is optional — student can reply "skip" — but the score glimpse
+// honestly reflects any that stay empty.
+function isHttpUrl(s) {
+  if (!s || typeof s !== 'string') return false;
+  try {
+    const u = new URL(s.trim());
+    return u.protocol === 'http:' || u.protocol === 'https:';
+  } catch { return false; }
+}
+function detectMissingLinks(rj) {
+  if (!rj) return [];
+  const out = [];
+  if (!isHttpUrl(rj.linkedin)) {
+    out.push({ kind: 'linkedin', target: 'contact.linkedin', label: 'LinkedIn URL', hint: 'linkedin.com/in/…' });
+  }
+  if (!isHttpUrl(rj.github)) {
+    out.push({ kind: 'github', target: 'contact.github', label: 'GitHub URL', hint: 'github.com/…' });
+  }
+  // Projects with a tech stack (i.e. real projects, not placeholders) but no
+  // repo link — highest-value asks because they let the recruiter click
+  // through and see the code.
+  const projects = Array.isArray(rj.projects) ? rj.projects : [];
+  for (let i = 0; i < projects.length; i++) {
+    const proj = projects[i] || {};
+    const hasStack = Array.isArray(proj.tech_stack) && proj.tech_stack.length > 0;
+    if (hasStack && !isHttpUrl(proj.github_url) && !isHttpUrl(proj.demo_url)) {
+      out.push({
+        kind: 'project_repo',
+        target: `projects[${i}].github_url`,
+        label: `Repo/demo link for "${(proj.name || 'project').slice(0, 40)}"`,
+        hint: 'github.com/… or your-project.vercel.app',
+      });
+    }
+  }
+  return out.slice(0, 6); // keep the ask compact
+}
+
+// Parse a batch of URLs from the student's response. Categorize each URL by
+// domain and match to the first-matching missing slot. Order-of-detection is
+// stable: LinkedIn/GitHub handled first, then project repos in order.
+function classifyAndFill(rj, missing, body) {
+  const t = String(body || '');
+  // Grab every URL-looking thing, http/https OR bare (domain.tld/...)
+  const urls = t.match(/https?:\/\/\S+|(?:[a-z0-9-]+\.)+[a-z]{2,}\/[^\s]*/gi) || [];
+  if (urls.length === 0) return { filled: [], missing_after: missing };
+
+  const normalize = (u) => {
+    let s = String(u).trim().replace(/[),.;]+$/, '');
+    if (!/^https?:\/\//i.test(s)) s = 'https://' + s;
+    return s;
+  };
+
+  const filled = [];
+  const remainingMissing = missing.slice();
+
+  for (const raw of urls) {
+    const url = normalize(raw);
+    if (!isHttpUrl(url)) continue;
+    const lower = url.toLowerCase();
+
+    // LinkedIn → contact.linkedin
+    if (/linkedin\.com\/(in|pub)\//.test(lower)) {
+      if (!isHttpUrl(rj.linkedin)) {
+        rj.linkedin = url;
+        filled.push({ kind: 'linkedin', url });
+        const i = remainingMissing.findIndex((m) => m.kind === 'linkedin');
+        if (i >= 0) remainingMissing.splice(i, 1);
+      }
+      continue;
+    }
+
+    // GitHub repo URL — decide: is this a top-level user or a specific repo?
+    if (/github\.com\//.test(lower)) {
+      const path = lower.split('github.com/')[1] || '';
+      const parts = path.split(/[/?#]/).filter(Boolean);
+      const isRepo = parts.length >= 2; // user/repo → treat as project repo
+      if (isRepo) {
+        // Fill first project without a repo link
+        const projects = Array.isArray(rj.projects) ? rj.projects : [];
+        const emptyIdx = projects.findIndex((p) => !isHttpUrl(p.github_url) && !isHttpUrl(p.demo_url));
+        if (emptyIdx >= 0) {
+          projects[emptyIdx].github_url = url;
+          filled.push({ kind: 'project_repo', target: `projects[${emptyIdx}].github_url`, url });
+          const i = remainingMissing.findIndex((m) => m.kind === 'project_repo' && m.target === `projects[${emptyIdx}].github_url`);
+          if (i >= 0) remainingMissing.splice(i, 1);
+          continue;
+        }
+      }
+      // Otherwise treat as contact.github if that slot is empty
+      if (!isHttpUrl(rj.github)) {
+        rj.github = url;
+        filled.push({ kind: 'github', url });
+        const i = remainingMissing.findIndex((m) => m.kind === 'github');
+        if (i >= 0) remainingMissing.splice(i, 1);
+      }
+      continue;
+    }
+
+    // Anything else → treat as a project demo link if a slot is empty
+    const projects = Array.isArray(rj.projects) ? rj.projects : [];
+    const emptyIdx = projects.findIndex((p) => !isHttpUrl(p.github_url) && !isHttpUrl(p.demo_url));
+    if (emptyIdx >= 0) {
+      projects[emptyIdx].demo_url = url;
+      filled.push({ kind: 'project_demo', target: `projects[${emptyIdx}].demo_url`, url });
+      const i = remainingMissing.findIndex((m) => m.kind === 'project_repo' && m.target === `projects[${emptyIdx}].github_url`);
+      if (i >= 0) remainingMissing.splice(i, 1);
+    }
+  }
+  return { filled, missing_after: remainingMissing };
+}
 // "change role" at RATE_SHOWING_SCORE keeps the parsed PDF and re-scores
 // against a different role — saves the student from re-uploading if they
 // picked the wrong target the first time.
@@ -130,15 +245,35 @@ async function handleAwaitingPdf({ session, phoneHash, body, phoneFrom, attachme
       return p.refusePdf(qc.suggestion === 'chaotic-layout' ? 'multi-column-layout' : 'text-too-thin-probably-image-pdf');
     }
 
+    // Deterministic hobby-section scan runs off the parsed lines directly —
+    // adding this field to the LLM schema caused gpt-4o-mini to loop on
+    // resumes without a hobbies section. Non-null interests are then
+    // available to the improve step for professional glorification.
+    const interests = scanInterests(parsed.lines);
+    if (interests.length > 0) ex.resume_json.interests = interests;
+
     persistRateSource(session, {
       text: parsed.text,
       lines: parsed.lines,
       resume_json: ex.resume_json,
       parseMeta: parsed.meta,
     });
+
+    // Detect missing critical URLs (LinkedIn / GitHub / project GitHubs).
+    // If any, ask the student to fill them in before scoring. Otherwise
+    // proceed straight to role.
+    const missing = detectMissingLinks(ex.resume_json);
+    if (missing.length > 0) {
+      session.rate.missing_links = missing.map((m) => ({ kind: m.kind, target: m.target, label: m.label, hint: m.hint }));
+      session.state = STATES.RATE_ASKING_LINKS;
+      await setSession(phoneHash, session);
+      logEvent({ phoneHash, eventName: 'rate_pdf_ingested', state: session.state, payload: { words: parsed.meta.wordCount, layer: parsed.meta.layerName, missing_links: missing.length } });
+      return p.askForMissingLinks(missing);
+    }
+
     session.state = STATES.RATE_AWAITING_ROLE;
     await setSession(phoneHash, session);
-    logEvent({ phoneHash, eventName: 'rate_pdf_ingested', state: session.state, payload: { words: parsed.meta.wordCount, layer: parsed.meta.layerName } });
+    logEvent({ phoneHash, eventName: 'rate_pdf_ingested', state: session.state, payload: { words: parsed.meta.wordCount, layer: parsed.meta.layerName, missing_links: 0 } });
     return p.askForRole();
   }
 
@@ -147,6 +282,50 @@ async function handleAwaitingPdf({ session, phoneHash, body, phoneFrom, attachme
   if (CANCEL_RE.test(t)) return cancelToModeSelect(session, phoneHash);
   if (BUILD_SWITCH_RE.test(t)) return switchToBuild(session, phoneHash);
   return p.askForPdfNoText();
+}
+
+// Handles RATE_ASKING_LINKS — parses URLs from student's message, fills
+// matching slots on session.rate.resume_json, then advances. Skip goes
+// straight to role. Anything with no URLs → re-show ask with remaining
+// missing (unless student typed skip).
+async function handleAskingLinks({ session, phoneHash, body }) {
+  const t = String(body || '').trim();
+  if (CANCEL_RE.test(t)) return cancelToModeSelect(session, phoneHash);
+  if (SKIP_RE_LOCAL.test(t)) {
+    session.state = STATES.RATE_AWAITING_ROLE;
+    session.rate.missing_links = null;
+    await setSession(phoneHash, session);
+    logEvent({ phoneHash, eventName: 'rate_links_skipped', state: session.state });
+    return '👍 Skip kar diya. Ab role batao.\n\n' + p.askForRole();
+  }
+
+  const missing = Array.isArray(session.rate.missing_links) ? session.rate.missing_links : [];
+  const { filled, missing_after } = classifyAndFill(session.rate.resume_json, missing, t);
+
+  if (filled.length === 0) {
+    return (
+      '🤔 Message me koi valid link nahi mila.\n\n' +
+      'Full URL bhejo (e.g. `https://github.com/yourname/project`) ya *"skip"* likho.'
+    );
+  }
+
+  session.rate.missing_links = missing_after;
+  logEvent({ phoneHash, eventName: 'rate_links_filled', state: session.state, payload: { count: filled.length, remaining: missing_after.length } });
+
+  if (missing_after.length === 0) {
+    session.state = STATES.RATE_AWAITING_ROLE;
+    await setSession(phoneHash, session);
+    return (
+      `✅ ${filled.length} link${filled.length > 1 ? 's' : ''} add ho gaya. Ab role batao.\n\n` +
+      p.askForRole()
+    );
+  }
+
+  await setSession(phoneHash, session);
+  return (
+    `✅ ${filled.length} link add ho gaya. Ye baaki abhi bhi missing hain:\n\n` +
+    p.askForMissingLinks(missing_after)
+  );
 }
 
 async function handleAwaitingRole({ session, phoneHash, body, phoneFrom, sendWhatsApp }) {
@@ -192,7 +371,6 @@ async function handleAwaitingRole({ session, phoneHash, body, phoneFrom, sendWha
 
   return p.renderScoreGlimpse({
     score: scored.score,
-    subscores: scored.subscores,
     issues: scored.issues,
     role: session.rate.role,
     unlockAmount: UNLOCK_AMOUNT,
@@ -337,6 +515,8 @@ async function switchToBuild(session, phoneHash) {
 // session.mode === 'rate'. Returns a reply (string OR {text, media}).
 async function handleRateInner({ session, phoneHash, body, phoneFrom, attachment, sendWhatsApp }) {
   switch (session.state) {
+    case STATES.RATE_ASKING_LINKS:
+      return handleAskingLinks({ session, phoneHash, body });
     case STATES.RATE_AWAITING_PDF:
       return handleAwaitingPdf({ session, phoneHash, body, phoneFrom, attachment, sendWhatsApp });
     case STATES.RATE_AWAITING_ROLE:

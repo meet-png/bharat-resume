@@ -109,42 +109,146 @@ const askForPdfNoText = () =>
   '  • *"build"* — naya resume banane ke liye\n' +
   '  • *"cancel"* — start over';
 
-// Renders score + top 3 issues + pay CTA. Called from rate-router after scoring.
-function renderScoreGlimpse({ score, subscores, issues, role, unlockAmount = 49 }) {
-  const lines = [];
-  lines.push(`📊 *Score: ${score.toFixed(1)} / 10*`);
-  lines.push(`Target role: ${role}\n`);
+// ─── Score glimpse (student-facing) ─────────────────────────────────────
+// Design rules (per Meet 2026-07-23 feedback):
+//   1. Short + crisp. No sub-score dump — that's internal noise.
+//   2. Cluster identical issues (three "no metric" bullets show as ONE line
+//      listing the source lines, not three separate identical entries).
+//   3. Section-level count breakdown — "where are the problems".
+//   4. Total count + severity distribution up top for scannability.
+//   5. Payment CTA emphasizes the LOCKED count so paying feels concrete.
 
-  // Compact subscore lines (2 columns for readability)
-  lines.push('Sub-scores:');
-  for (const [key, sub] of Object.entries(subscores)) {
-    const label = String(sub.label || key).padEnd(38);
-    lines.push(`  ${label}  ${sub.earned.toFixed(1)} / ${sub.max.toFixed(1)}`);
-  }
-  lines.push('');
+const CATEGORY_TO_SECTION = {
+  content_missing_metric:     'Content',
+  content_low_impact:         'Content',
+  content_weak_verb:          'Content',
+  content_filler_phrase:      'Content',
+  content_metric_density_low: 'Content',
+  content_no_bullets:         'Content',
+  role_fit_missing_keywords:  'Role fit',
+  ats_multi_column:           'Structure',
+  ats_weak_structure:         'Structure',
+  polish_page_count_high:     'Polish',
+  polish_date_format_inconsistent: 'Polish',
+  polish_grammar:             'Polish',
+  contact_email_missing:      'Contact',
+  contact_phone_missing:      'Contact',
+  contact_linkedin_missing:   'Contact',
+  contact_linkedin_legacy_format: 'Contact',
+  contact_github_missing:     'Contact',
+  india_cgpa_missing:         'India fields',
+  india_cgpa_missing_denominator: 'India fields',
+  india_boards_missing:       'India fields',
+};
 
-  const top = (issues || []).slice(0, 3);
-  if (top.length > 0) {
-    lines.push('*Top fixes (full report has more):*');
-    for (let i = 0; i < top.length; i++) {
-      const it = top[i];
-      const src = it.source_line ? ` (line ${it.source_line})` : '';
-      lines.push(`\n${i + 1}️⃣  [${it.severity}]${src}`);
-      lines.push(`     ${String(it.why).slice(0, 180)}`);
-      lines.push(`     _Cost: ${String(it.cost).slice(0, 120)}_`);
+const CATEGORY_SHORT = {
+  content_missing_metric:     'bullets missing metrics',
+  content_low_impact:         'low-impact bullets',
+  content_weak_verb:          'weak verbs',
+  content_filler_phrase:      'filler phrases',
+  content_metric_density_low: 'low metric density',
+  content_no_bullets:         'no bullets found',
+  role_fit_missing_keywords:  'role-fit gaps',
+  ats_multi_column:           'multi-column layout',
+  ats_weak_structure:         'weak section structure',
+  polish_page_count_high:     'page count over 1',
+  polish_date_format_inconsistent: 'inconsistent date format',
+  polish_grammar:             'grammar issues',
+  contact_email_missing:      'email missing',
+  contact_phone_missing:      'phone missing',
+  contact_linkedin_missing:   'LinkedIn URL missing',
+  contact_linkedin_legacy_format: 'LinkedIn legacy /pub/ format',
+  contact_github_missing:     'GitHub URL missing',
+  india_cgpa_missing:         'CGPA missing',
+  india_cgpa_missing_denominator: 'CGPA /10 denominator missing',
+  india_boards_missing:       '10th/12th % missing',
+};
+
+function sevWeight(s) { return s === 'CRITICAL' ? 3 : s === 'MEDIUM' ? 2 : 1; }
+
+function clusterIssues(issues) {
+  const groups = new Map();
+  for (const iss of (issues || [])) {
+    const key = iss.category;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        category: key,
+        section: CATEGORY_TO_SECTION[key] || 'Other',
+        short: CATEGORY_SHORT[key] || key,
+        severity: iss.severity,
+        lines: [],
+        count: 0,
+      });
     }
-  } else {
-    lines.push('_No critical issues found — the paid report will show minor polish opportunities._');
+    const g = groups.get(key);
+    g.count++;
+    if (sevWeight(iss.severity) > sevWeight(g.severity)) g.severity = iss.severity;
+    if (iss.source_line) g.lines.push(iss.source_line);
+  }
+  return [...groups.values()].sort((a, b) => sevWeight(b.severity) - sevWeight(a.severity));
+}
+
+function sectionCounts(clusters) {
+  const m = new Map();
+  for (const c of clusters) m.set(c.section, (m.get(c.section) || 0) + c.count);
+  return [...m.entries()].sort((a, b) => b[1] - a[1]);
+}
+
+function renderScoreGlimpse({ score, issues, role, unlockAmount = 49 }) {
+  const clusters = clusterIssues(issues);
+  const total = clusters.reduce((n, c) => n + c.count, 0);
+  const critical = clusters.reduce((n, c) => n + (c.severity === 'CRITICAL' ? c.count : 0), 0);
+  const medium   = clusters.reduce((n, c) => n + (c.severity === 'MEDIUM' ? c.count : 0), 0);
+  const minor    = clusters.reduce((n, c) => n + (c.severity === 'MINOR' ? c.count : 0), 0);
+
+  const lines = [];
+  lines.push(`📊 *Score: ${score.toFixed(1)} / 10*  ·  ${role}`);
+  lines.push('');
+
+  if (total === 0) {
+    lines.push('✨ Kuch bhi critical nahi mila — resume already strong hai.');
+    lines.push('');
+    lines.push(`Minor polish ke liye ₹${unlockAmount} unlock kariye, ya *"cancel"* karo.`);
+    return lines.join('\n');
   }
 
+  lines.push(`*${total} issues found*  ·  🔴 ${critical} critical  ·  🟡 ${medium} medium  ·  🟢 ${minor} minor`);
   lines.push('');
+
+  lines.push('📌 *Where the problems are:*');
+  for (const [section, n] of sectionCounts(clusters)) {
+    lines.push(`   • ${section} — ${n} issue${n > 1 ? 's' : ''}`);
+  }
+  lines.push('');
+
+  lines.push('*Biggest fixes needed:*');
+  const shown = clusters.slice(0, 4);
+  for (const c of shown) {
+    const sev = c.severity === 'CRITICAL' ? '🔴' : c.severity === 'MEDIUM' ? '🟡' : '🟢';
+    let linesTxt = '';
+    if (c.lines.length) {
+      const shownLines = c.lines.slice(0, 5).join(', ');
+      linesTxt = c.count > 1
+        ? ` — ${c.count}× (lines ${shownLines}${c.lines.length > 5 ? '…' : ''})`
+        : ` — line ${c.lines[0]}`;
+    } else if (c.count > 1) {
+      linesTxt = ` — ${c.count}×`;
+    }
+    lines.push(`   ${sev} ${c.short}${linesTxt}`);
+  }
+  const remaining = clusters.length - shown.length;
+  if (remaining > 0) {
+    lines.push(`   … +${remaining} more categor${remaining > 1 ? 'ies' : 'y'} in the full report`);
+  }
+  lines.push('');
+
   lines.push('━━━━━━━━━━━━━━━');
-  lines.push(`💳 *₹${unlockAmount} UPI unlock:*`);
-  lines.push('  • Full 8-point report (all fixes)');
-  lines.push('  • Clean improved PDF (no watermark)');
-  lines.push('  • Audit trail — every change cites your original line');
+  lines.push(`🔓 *₹${unlockAmount} unlock:*`);
+  lines.push(`   • All ${total} issues addressed`);
+  lines.push('   • Clean improved PDF (no watermark)');
+  lines.push('   • Full audit — every change cites your original line');
   lines.push('');
-  lines.push('Reply *"pay"* to unlock, *"change role"* to try a different target, or *"cancel"* to start over.');
+  lines.push('Reply *"pay"*  ·  *"change role"*  ·  *"cancel"*');
   return lines.join('\n');
 }
 
@@ -163,6 +267,25 @@ const cancelled = () =>
 const notNow = () =>
   '_Rate mode se cancel ho gaya. Type "rate" to start again or "build" for new resume._';
 
+// Proactive missing-link prompt (post-extract, pre-role). Shown ONLY when
+// detectMissingLinks() found something worth asking for. Every missing link
+// is optional — student can reply "skip" and we proceed without them, but
+// the score will honestly reflect the gap.
+function askForMissingLinks(missing) {
+  const lines = [];
+  lines.push('📎 *Kuch important links missing hain aapke resume me:*');
+  lines.push('');
+  for (const m of missing) {
+    lines.push(`   • ${m.label}${m.hint ? `  _(${m.hint})_` : ''}`);
+  }
+  lines.push('');
+  lines.push('*Ek message me sab bhejo* — mein sab identify kar lunga:');
+  lines.push('   `linkedin.com/in/yourname github.com/yourname github.com/yourname/project-repo`');
+  lines.push('');
+  lines.push('Ya *"skip"* likho — score aayegi lekin missing-links flag ho jayegi.');
+  return lines.join('\n');
+}
+
 module.exports = {
   modeSelect,
   askForPdf,
@@ -177,4 +300,5 @@ module.exports = {
   improving,
   cancelled,
   notNow,
+  askForMissingLinks,
 };
