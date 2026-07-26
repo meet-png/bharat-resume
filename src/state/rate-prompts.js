@@ -4,13 +4,14 @@
 // pilot audience.
 
 const modeSelect = () =>
-  'Namaste 🙏 Bharat Resume me swagat hai.\n\n' +
+  'Namaste 🙏 BHARAT RESUME me swagat hai — main Saathi hu, AI resume assistant.\n\n' +
   'Kya karna hai?\n\n' +
   '*1️⃣  Naya resume banao*  — 20 min ka chat, aap details doge, main ATS-ready PDF banaunga\n' +
   '*2️⃣  Existing rate karvao* — apna PDF resume bhejo, score + fixes dunga, ₹49 me clean version + full report\n\n' +
   'Reply karo: *"1"* / *"build"* / *"naya banao"* — for building\n' +
   '            *"2"* / *"rate"* / *"rate karvao"* — for rating existing\n\n' +
-  '_Note: File / photo bhejni ho to option 2 (rate) select kariye._';
+  '_Note: File / photo bhejni ho to option 2 (rate) select kariye._\n' +
+  '_Anytime type "stop" to unsubscribe._';
 
 const askForPdf = () =>
   '📊 *Rate mode active*\n\n' +

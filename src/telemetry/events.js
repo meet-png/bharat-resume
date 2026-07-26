@@ -26,6 +26,9 @@ const EVENT_NAMES = Object.freeze([
   'session_ended',
   'feedback_apply',
   'rating_submitted', // v1 build post-delivery 1-5 stars (was silently dropped)
+  // ── Meta compliance opt-out (STOP / START handlers) ─────────
+  'opted_out',
+  'opted_back_in',
   // ── v2 rate mode ─────────────────────────────────────────────
   'mode_selected',
   'rate_pdf_ingested',

@@ -112,6 +112,24 @@ async function releasePhoneLock(phoneHash, token) {
   }
 }
 
+// Opt-out (Meta compliance). Stored long-lived so it survives session TTL.
+// 1-year TTL is a compromise: long enough that a re-message next semester is
+// still respected, short enough that a phone number recycled to a new person
+// isn't permanently silenced. Silent-drop while set; cleared on START.
+const OPTOUT_TTL_SEC = 365 * 24 * 60 * 60;
+
+async function setOptedOut(phoneHash) {
+  await getClient().set(`optout:${phoneHash}`, '1', 'EX', OPTOUT_TTL_SEC);
+}
+
+async function isOptedOut(phoneHash) {
+  return (await getClient().get(`optout:${phoneHash}`)) === '1';
+}
+
+async function clearOptedOut(phoneHash) {
+  await getClient().del(`optout:${phoneHash}`);
+}
+
 // Returns { allowed, count, resetInSec }.
 async function checkRateLimit(phoneHash) {
   const key = `ratelimit:${phoneHash}`;
@@ -152,6 +170,9 @@ module.exports = {
   releasePhoneLock,
   checkRateLimit,
   checkRateLlmCap,
+  setOptedOut,
+  isOptedOut,
+  clearOptedOut,
   SESSION_TTL_SEC,
   RATELIMIT_WINDOW_SEC,
   RATELIMIT_MAX,

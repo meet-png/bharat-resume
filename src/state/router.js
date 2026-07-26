@@ -10,7 +10,7 @@ const { createPaymentLink } = require('../payment');
 const { applyEdit } = require('../llm/edit');
 const { respond } = require('../llm/respond');
 const { scoreResume, suggestionsFor } = require('../resume/ats_score');
-const { getSession, setSession, checkRateLimit, acquirePhoneLock, releasePhoneLock, RATELIMIT_MAX } = require('../store/redis');
+const { getSession, setSession, checkRateLimit, acquirePhoneLock, releasePhoneLock, setOptedOut, isOptedOut, clearOptedOut, RATELIMIT_MAX } = require('../store/redis');
 const { logEvent, bumpUserActivity } = require('../telemetry/events');
 const { sendWhatsApp } = require('../messaging');
 const { config } = require('../config');
@@ -56,6 +56,12 @@ const JD_MARKER_RE = /\b(responsibilit|requirement|qualification|years? of exper
 const URL_RE = /^https?:\/\//i;
 const SHOW_RE = /^\s*show\s*me\s*$/i;
 const RESET_RE = /^\s*reset\s*$/i;
+// Meta compliance: universal opt-out. STOP anywhere silences us until the
+// student replies START. Fired at the very top of handleInner (before mode
+// dispatch, before session load) so it works from any state and even from a
+// cold session. See src/store/redis.js:setOptedOut for storage.
+const STOP_RE = /^\s*(stop|unsubscribe|opt.?out|band karo|band kar|bandh karo)\s*$/i;
+const START_RE = /^\s*(start|resume|opt.?in|subscribe|shuru karo|shuru|chalu karo)\s*$/i;
 // Student wants us to RATE / REVIEW / SCORE / MODIFY / IMPROVE an EXISTING
 // resume (they had before this conversation). We only GENERATE new resumes —
 // evaluate/rewrite of an uploaded resume isn't in scope. Fire this at the very
@@ -500,6 +506,25 @@ async function handleInner({ phoneHash, body, phoneFrom, attachment }) {
   const rl = await checkRateLimit(phoneHash);
   if (!rl.allowed) {
     return pickMessage('rateLimit', { sec: rl.resetInSec });
+  }
+
+  // ─── Meta compliance: STOP / opt-out gate ───────────────────────────────
+  // Runs BEFORE session load so a cold-session STOP still works and a
+  // previously opted-out student is silenced without spinning up a new session.
+  // Silent-drop returns '' — whatsapp.js short-circuits when text is empty.
+  if (STOP_RE.test(trimmed)) {
+    await setOptedOut(phoneHash);
+    logEvent({ phoneHash, eventName: 'opted_out' });
+    return 'Aap unsubscribe ho gaye. Aapko koi message nahi bhejenge.\n\nReply *START* anytime to re-enable.\n\nData delete karna hai? → bharat-resume-production.up.railway.app/data-deletion';
+  }
+  if (await isOptedOut(phoneHash)) {
+    if (START_RE.test(trimmed)) {
+      await clearOptedOut(phoneHash);
+      logEvent({ phoneHash, eventName: 'opted_back_in' });
+      // Fall through to normal handling — a fresh session will be created below.
+    } else {
+      return '';
+    }
   }
 
   if (RESET_RE.test(trimmed)) {
