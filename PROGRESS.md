@@ -58,6 +58,60 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 
 ## 3. Session log
 
+### Session — 2026-07-27 (Meta compliance: STOP/START opt-out + AI disclosure in first message, Claude Opus 4.7)
+
+**Context:** Conversation started as a deep-research audit — "is Bharat Resume legal? Can Meta shut it down at any point?" Answer: legal, low-to-medium risk. The ONE real interpretive risk is Meta's Jan 15, 2026 "AI Provider" clause, which is (a) framed for general-purpose AI wrappers not vertical resume services, and (b) currently under EU antitrust pressure (Statement of Objections issued 9 Feb 2026). Every other axis — Commerce Policy, Business Solution Terms, external payments, DPDP, TRAI/DLT (doesn't apply to WhatsApp), quality rating — Bharat Resume is compliant.
+
+Meet then asked "at 10k users where does it break?" — answered with ranked failure modes (Puppeteer render queue at ~500 concurrent, solo support bandwidth at ~500-1000 tickets, quality rating pressure at 5-10k, GST at 40k paid, DPDP SDF at 10k+). Then narrowed to "we have 5-8 users right now, what's actually urgent?" — answer: only 3 things worth doing NOW regardless of user count. Meet asked me to check codebase for existing policy work and ship whatever's missing.
+
+**What was already in place (grep-verified):**
+- `public/privacy.html` — DPDP-comprehensive: grievance officer, 30-day response, all rights enumerated, 8-year payment retention citing Income-tax Act §44AA, third-party processor table with regions, children §9 (18+ intent).
+- `public/terms.html` §6 — refund policy: full refund if PDF undelivered in 24h or technically broken; no refund for subjective dissatisfaction; 3 business days to initiate, 7 business days to settle.
+- `public/data-deletion.html` — deletion instructions and process.
+- `src/routes/admin.js` serves `/privacy`, `/terms`, `/data-deletion` as static HTML with 1h cache.
+- Rate-mode `CANCEL_RE` in `rate-router.js` already matched "stop" — but only cancelled the current rate flow, wasn't a Meta-compliant opt-out.
+
+**Real gaps found and shipped (commit `a40503d`, 5 files, +57/-7):**
+
+**Fix 1 — Global STOP / START opt-out handler (`src/state/router.js` + `src/store/redis.js` + `src/telemetry/events.js`):**
+- `src/store/redis.js`: new `setOptedOut(phoneHash)` / `isOptedOut(phoneHash)` / `clearOptedOut(phoneHash)` writing Redis key `optout:{phoneHash}` with **1-year TTL** — long enough that a re-message next semester is respected, short enough that phone-number recycle isn't permanently silenced.
+- `src/state/router.js`: `STOP_RE = /^\s*(stop|unsubscribe|opt.?out|band karo|band kar|bandh karo)\s*$/i` and `START_RE = /^\s*(start|resume|opt.?in|subscribe|shuru karo|shuru|chalu karo)\s*$/i`. Gate placed at the very top of `handleInner` — **after rate-limit, before RESET, before session load, before mode dispatch** — so STOP works from any state including cold sessions.
+- STOP flow: `setOptedOut` + `logEvent('opted_out')` + return confirmation with data-deletion link.
+- Silent-drop flow: if `isOptedOut(phoneHash)` and message isn't START, return `''` — `src/routes/whatsapp.js` line 184 short-circuits on empty text and never sends outbound. Zero messages sent to opted-out users, honors Meta's rule.
+- START flow: `clearOptedOut` + `logEvent('opted_back_in')` + fall through to normal handling (a fresh session gets created below).
+- Compliance note: the pre-existing `stop` inside `rate-router.js#CANCEL_RE` is now unreachable (my global handler intercepts first) — left as dead code rather than editing a proven regex.
+
+**Fix 2 — AI disclosure in first message (`src/state/prompts.js` + `src/state/rate-prompts.js`):**
+Meta's Jan 15, 2026 policy requires the bot to identify as AI in its first message. All entry-point prompts updated:
+- `PROMPTS[STATES.NEW]` — all 4 variants now name Saathi as an "AI assistant" / "AI resume assistant" / "AI resume builder" (variant 3 already did) / "your AI resume assistant". Every variant's command-hint line also appends `'stop' to unsubscribe`.
+- `rate-prompts.js#modeSelect()` — welcome now reads "main Saathi hu, AI resume assistant" and adds a trailing `_Anytime type "stop" to unsubscribe._` line.
+
+**Fix 3 — Telemetry allowlist (`src/telemetry/events.js`):**
+- Added `opted_out` and `opted_back_in` to `EVENT_NAMES`. Without this, the fire-and-forget `logEvent` would warn-and-skip both events (per `logEvent`'s unknown-event guard) and the compliance record would be silently absent from the events table.
+
+**What I verified before commit:**
+- All modified modules load clean via `node -e "require(...)"`.
+- Ran full regression suite twice: (1) with my changes on branch, (2) after `git stash`. **Identical pass/fail on both runs** — 7 non-LLM suites green, 8 LLM-dependent suites fail identically both times. Failures are pre-existing (need OPENAI_API_KEY in this local env), not caused by this session.
+- Selectively staged only my 5 files. Left untouched: Meet's README.md rewrite, docs/DECISIONS.md, e2e_da_resume.pdf.
+
+**Compliance verdict after this session:**
+- ✅ AI disclosure in first message — Meta Jan 2026 rule
+- ✅ Universal STOP opt-out from any state — Meta rule + DPDP §8(7)
+- ✅ Data-deletion link surfaced in the STOP confirmation
+- ✅ Silent-drop for opted-out users — no template violations possible
+
+**What was explicitly deferred (from the scaling analysis, not urgent at 5-8 users):**
+- Age gate for under-18 — recommended BEFORE the 100-student JECRC broadcast (some 1st-years are 17, DPDP §9 requires parental consent, ₹200 cr penalty tier)
+- Trademark filing — only urgent if Meet goes public on LinkedIn/Twitter first
+- UptimeRobot ping — nice-to-have
+- Puppeteer worker queue — only breaks at ~500 concurrent renders
+- GST registration — hits at 40k paid users, not now
+- DPDP Significant Data Fiduciary designation — 10k+ users territory
+
+**Next session priorities:**
+1. Second live-test round on 1-2 friend resumes before broadcast (verifies Batch 1-5 + Option A + already-good gate + this session's welcome-copy changes end-to-end)
+2. If broadcast timeline firms up: add age gate before it goes out
+
 ### Session — 2026-07-23 (v2 rate-mode UX overhaul from Aditya's live test — cluster issues + scope-aware verify + god-level voice + hobbies + missing-links + honest merge to main, Claude Opus 4.7)
 
 **Context:** v2 rate mode was merged to `main` (commit `2d56e9e`) and Railway auto-deployed. Meet ran the first real live test with his friend Aditya's actual resume PDF (`resume (7).pdf`) and screenshot-dumped a large feedback batch that demanded a UX overhaul + real-optimization work before the pilot broadcast. This session addresses all of it in a single bundle (commit `afdd0b3`).
