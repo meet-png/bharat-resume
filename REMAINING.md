@@ -1,6 +1,6 @@
 # BHARAT RESUME — What's Left End-to-End
 
-Last refreshed: **2026-07-27**. Living checklist. Keep this canonical for "what's next" questions — PROGRESS.md is the session log, this is the roadmap.
+Last refreshed: **2026-07-29**. Living checklist. Keep this canonical for "what's next" questions — PROGRESS.md is the session log, this is the roadmap.
 
 Convention: `[ ]` = open · `[x]` = done · `[~]` = in progress · `[!]` = blocker · `[?]` = decision needed
 
@@ -52,6 +52,7 @@ Convention: `[ ]` = open · `[x]` = done · `[~]` = in progress · `[!]` = block
 ## 4. Social media presence
 
 - [ ] Secure `@bharatresume` handles across IG / LinkedIn / X / YouTube BEFORE broadcast (squatter risk).
+- [ ] **WhatsApp Username reservation (rollout 2026-07)** — Meet spotted the "Usernames are coming soon" reservation flow on his personal WA (`meet.maheshwarii`). Nuance: bot number `+91 91163 94657` runs on **WhatsApp Cloud API**, NOT the consumer app — so the phone-side Edit screen doesn't exist for it. Reservation must happen on a consumer WA account. Defensive play: reserve `bharatresume` (priority 1), `bharat.resume` (priority 2, matches dot-format of `meet.maheshwarii`) on Meet's personal account if multi-username allowed, OR on a dedicated spare SIM account. Before tapping Edit, check "Learn more" for (a) multi-username-per-account rule and (b) transferability to WABA numbers. If non-transferable, use spare SIM. Distinct from the Business Manager `@bharatresume` retry (see §2, gated on account age + organic traffic).
 - [ ] Bios written for each (short + role: "WhatsApp AI resume builder for Indian students. ₹49. saathi 🙏").
 - [ ] Announcement post on Meet's personal LinkedIn once ≥5 friends have used it (real testimonial angle).
 
