@@ -72,8 +72,15 @@ async function fetchMetrics() {
     .limit(5000);
   if (error) throw new Error(`fetchMetrics: ${error.message}`);
 
-  const startOfToday = new Date();
-  startOfToday.setHours(0, 0, 0, 0);
+  // India has no DST; IST = UTC+5:30 permanently. Railway runs UTC, so a naive
+  // setHours(0,0,0) reset "today" at 05:30 IST — the first 5.5 hrs of the IST
+  // day silently included yesterday's events, then a cliff at 05:30 dropped
+  // morning data. Compute true IST midnight as a UTC Date so the counter
+  // tracks the calendar day students actually experience.
+  const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+  const startOfToday = new Date(
+    Math.floor((Date.now() + IST_OFFSET_MS) / 86400000) * 86400000 - IST_OFFSET_MS,
+  );
 
   const counts = {};
   const todayCounts = {};
@@ -85,6 +92,11 @@ async function fetchMetrics() {
   let modeSelectedBuild = 0;
   let modeSelectedRate = 0;
   const rateScores = [];
+  // Revenue is sum-of-actual-payment-amount from event payloads, NOT count ×
+  // ₹49. Lets pricing moves (₹49 → ₹79) or per-user discounts flow through
+  // the dashboard automatically as fulfill.js emits actual amounts.
+  let revenueBuildInr = 0;
+  let revenueRateInr = 0;
 
   for (const e of events) {
     counts[e.event_name] = (counts[e.event_name] || 0) + 1;
@@ -104,6 +116,12 @@ async function fetchMetrics() {
     }
     if (e.event_name === 'rate_score_computed' && e.payload && typeof e.payload.score === 'number') {
       rateScores.push(e.payload.score);
+    }
+    if (e.event_name === 'payment_succeeded' && e.payload && typeof e.payload.amount === 'number') {
+      revenueBuildInr += e.payload.amount;
+    }
+    if (e.event_name === 'rate_payment_succeeded' && e.payload && typeof e.payload.amount === 'number') {
+      revenueRateInr += e.payload.amount;
     }
   }
 
@@ -129,9 +147,6 @@ async function fetchMetrics() {
   const avgRateScore = rateScores.length
     ? Math.round((rateScores.reduce((a, b) => a + b, 0) / rateScores.length) * 10) / 10
     : null;
-
-  // Total revenue: build ₹49 per paid + rate ₹49 per paid. Same ₹49 unit for now.
-  const totalPaid = paid + ratePaid;
 
   return {
     users: users || 0,
@@ -169,8 +184,8 @@ async function fetchMetrics() {
     conversionPct: delivered ? Math.round((paid / delivered) * 100) : 0,
     edits: { free: freeEdits, paid: paidEdits },
     ats: { avg: avgAts, samples: atsScores.length },
-    revenueInr: totalPaid * 49,
-    revenueBreakdown: { build: paid * 49, rate: ratePaid * 49 },
+    revenueInr: revenueBuildInr + revenueRateInr,
+    revenueBreakdown: { build: revenueBuildInr, rate: revenueRateInr },
     recent: events.slice(0, 15).map((e) => ({
       event_name: e.event_name,
       state: e.state_at_event,
