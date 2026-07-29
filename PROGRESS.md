@@ -58,6 +58,44 @@ Legend: ⬜ not started · 🟡 partial · ✅ done · 🔴 blocked
 
 ## 3. Session log
 
+### Session — 2026-07-29 (Dashboard accuracy audit + fixes · WhatsApp Username reservation task · scaling-roadmap strategy chat, Claude Opus 4.7)
+
+**Context:** Started as a strategy conversation — Meet asked for a blunt Bharat Resume vs Rezi teardown, then narrowed to "capture a good chunk of the Indian market," then locked to a concrete target: **50,000 paid resumes** with pricing bump to ₹79 after the first 1,000 users. Answered with realistic funnel math (~1.25M message-reach needed at 4% overall conversion), phased roadmap (Phase 0 pilot → Phase 3 50K over 24-36 months), competitive framing (Hiration is the real ceiling, not Rezi), and the pricing critique (₹49 → ₹79 mid-flight trains early users to feel cheated — anchor at ₹79 with "Founding 1000 — ₹49" scarcity discount instead). No code shipped from that discussion; captured for future planning.
+
+Then Meet spotted the new WhatsApp Username consumer feature ("Usernames are coming soon") on his personal WA and asked to reserve one for Bharat Resume. Flagged the WABA-vs-consumer nuance (bot number runs on Cloud API — can't reserve via phone-side Edit screen), added a distinct sub-item to REMAINING §4 with defensive-play instructions (personal account + spare-SIM options), priority variants, and two pre-reservation checks. Distinct from the Business Manager `@bharatresume` retry in §2 (which is gated on account age + organic traffic).
+
+Then Meet said "reset the dashboard to 0 users, make sure it's real-time." Investigated: found `DASHBOARD_DEMO_MODE=1` env var (set 2026-07-23 for pilot-marketing screenshots) was almost certainly still ON on Railway, silently serving hardcoded fake data (64 students / 38 paid / ₹1,862) regardless of DB state. Meet flipped it off + wiped Supabase `users` + `events` tables himself. Then asked me to audit every metric for real-time accuracy.
+
+**Dashboard audit — 4 accuracy bugs found (see [[bharat-resume-bug-classes]] for taxonomy pattern):**
+
+- 🔴 **BUG 1: "Today" counters used server-local time** (`postgres.js:75-77`). Railway runs UTC, so `startOfToday.setHours(0,0,0,0)` reset "today" at 05:30 IST daily — first 5.5 hrs of the IST day silently included yesterday's events, then a cliff at 05:30 dropped morning data. Display timestamps ARE in IST via `fmtIst()` so the inconsistency was visible if you looked closely: an event at "01:30 IST today" wouldn't appear in the "today" totals.
+- 🔴 **BUG 2: Revenue hardcoded at ₹49** (`postgres.js:172-173`). Every payment event correctly recorded `payload: { amount: 49 }` at emission (`fulfill.js:101`, `rate/fulfill.js:103`), but the dashboard ignored the payload and multiplied `count × 49`. Silent under-report the moment pricing moves (₹49 → ₹79 planned) or any per-user discount ever ships.
+- 🟡 **BUG 3: `mode_selected` fires more than once per user** (`rate-router.js:509` re-fires on `from: 'rate_delivered'`). Mode-split card shows event count, not unique users. Distorts at scale.
+- 🟡 **BUG 4: 5000-event fetch limit** (`postgres.js:72`). Silent funnel drift once total events > 5000 (~250 users × 20 events avg). Defer to SQL aggregates fix, not a limit bump.
+
+**What shipped this session — 2 commits pushed to `main`:**
+
+**Commit `ef07381` — "Dashboard accuracy: sum-of-payload revenue + IST midnight + drop demo mode"** (2 files, +23/-76):
+- `src/store/postgres.js` — BUG 1 fix: compute IST midnight as UTC Date using `IST_OFFSET_MS = 5.5 * 60 * 60 * 1000` and `Math.floor((Date.now() + IST_OFFSET_MS) / 86400000) * 86400000 - IST_OFFSET_MS`. India has no DST so the flat offset is safe permanently.
+- `src/store/postgres.js` — BUG 2 fix: added `revenueBuildInr` + `revenueRateInr` counters, incremented in the fold loop from `payload.amount` on `payment_succeeded` and `rate_payment_succeeded` events (with `typeof === 'number'` guard). Return object now uses `revenueBuildInr + revenueRateInr` instead of `totalPaid * 49`. Removed the now-dead `totalPaid` intermediate. **This means the ₹79 pricing flip is now a one-line change in `fulfill.js`** (`amount: 49` → `amount: 79`) — dashboard tracks automatically.
+- `src/routes/admin.js` — deleted the entire `demoMetrics()` function (60 lines of hardcoded fake data) + the `DASHBOARD_DEMO_MODE === '1' ? demoMetrics() : await fetchMetrics()` gate. Route now unconditionally calls `fetchMetrics()`. Removes the "did the dashboard silently switch to fake data" concern from the codebase entirely.
+
+**Commit `8eeeee0` — "Docs: WhatsApp Username reservation task in REMAINING §4"** (1 file, +2/-1):
+- REMAINING.md §4 — new sub-item for WA Username reservation with the WABA-vs-consumer nuance, defensive-play instructions (personal account + spare SIM), 5 priority username variants, and two pre-reservation checks (multi-username-per-account rule + transferability to WABA numbers). Refreshed header date to 2026-07-29.
+
+**What I verified before commit (contract-override framework):**
+- Ran full regression suite twice: once with my changes (7 fail / 8 pass), once after `git stash` (7 fail / 8 pass — identical set). All 7 failures are pre-existing LLM-dependent suites (need `OPENAI_API_KEY` locally); my changes are isolated to the dashboard read path and don't touch state machine / router / payments / PDF generation. Framework satisfied: environmentally-broken tests, not contract-broken.
+- Selectively staged only my files. Left untouched: Meet's README.md rewrite, docs/DECISIONS.md, e2e_da_resume.pdf.
+
+**Deferred (with un-park signals):**
+- **BUG 4 (5000-event limit)** — non-urgent at current scale; un-park when total events pass ~4000 or first funnel-count-drop is observed. Fix as SQL aggregates (`SELECT event_name, COUNT(*) GROUP BY`), not a limit bump.
+- **BUG 3 (mode split double-counts)** — invisible at current scale; simplest fix is renaming the card label to "Mode selections" (honest, zero code change). Un-park before broadcast.
+- **Pricing anchor decision** — chat concluded the ₹49 → ₹79 mid-flight bump is suboptimal (trains early users to feel cheated). Recommended anchor: ₹79 with "Founding 1000 — ₹49" scarcity framing. Meet's call. When executed, `fulfill.js:101` + `rate/fulfill.js:103` `amount:` values change; dashboard already handles this correctly.
+
+**Next session priorities (unchanged from 2026-07-27):**
+1. Second live-test round on 1-2 friend resumes before broadcast
+2. If broadcast timeline firms up: add age gate before it goes out (see REMAINING §0)
+
 ### Session — 2026-07-27 (Meta compliance: STOP/START opt-out + AI disclosure in first message, Claude Opus 4.7)
 
 **Context:** Conversation started as a deep-research audit — "is Bharat Resume legal? Can Meta shut it down at any point?" Answer: legal, low-to-medium risk. The ONE real interpretive risk is Meta's Jan 15, 2026 "AI Provider" clause, which is (a) framed for general-purpose AI wrappers not vertical resume services, and (b) currently under EU antitrust pressure (Statement of Objections issued 9 Feb 2026). Every other axis — Commerce Policy, Business Solution Terms, external payments, DPDP, TRAI/DLT (doesn't apply to WhatsApp), quality rating — Bharat Resume is compliant.
